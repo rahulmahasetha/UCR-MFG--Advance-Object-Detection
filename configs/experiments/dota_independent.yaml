@@ -1,0 +1,15 @@
+experiment_name: "ucr_mfg_dota_independent"
+mode: "independent_experiment"
+dataset_config: "configs/datasets/dota_v1_5.yaml"
+model_config: "configs/model/default.yaml"
+train:
+  max_epochs: 100
+  batch_size: 2
+  classes: 16
+  hbb_conversion: true
+checkpoint:
+  save_dir: "checkpoints/dota_independent"
+  save_latest: true
+  save_best: true
+  keep_last_n: 3
+

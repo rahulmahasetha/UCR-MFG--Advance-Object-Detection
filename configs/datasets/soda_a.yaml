@@ -1,0 +1,24 @@
+dataset_name: "SODA-A"
+root_dir: "dataset/SODA-A"
+annotation_format: "COCO_JSON"
+splits:
+  train: "train"
+  test: "test"
+  archive: "Images.zip"
+classes:
+  num_classes: 9
+  names:
+    - "airplane"
+    - "helicopter"
+    - "small-vehicle"
+    - "large-vehicle"
+    - "ship"
+    - "harbor"
+    - "swimming-pool"
+    - "storage-tank"
+    - "container"
+image_size: [1024, 1024]
+evaluation:
+  metric: "mAP@0.5, AP-small"
+  verified_on_disk: false
+

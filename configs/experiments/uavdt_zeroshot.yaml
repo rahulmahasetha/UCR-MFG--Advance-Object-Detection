@@ -1,0 +1,13 @@
+experiment_name: "ucr_mfg_uavdt_zeroshot"
+mode: "zero_shot_evaluation"
+dataset_config: "configs/datasets/uavdt.yaml"
+weights_checkpoint: "checkpoints/visdrone_primary/best.pth"
+evaluation:
+  split: "test"
+  metric: "mAP@0.5"
+  ontology_mapping:
+    car: [3, 4]   # VisDrone car (index 3), van (index 4) -> UAVDT car (index 0)
+    truck: [5]    # VisDrone truck (index 5) -> UAVDT truck (index 1)
+    bus: [8]      # VisDrone bus (index 8) -> UAVDT bus (index 2)
+  unlabeled_categories: "ignore"
+

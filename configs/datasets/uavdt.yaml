@@ -1,0 +1,25 @@
+dataset_name: "UAVDT"
+root_dir: "dataset/UAVDT-Benchmark-M"
+annotation_format: "HBB"
+splits:
+  attr_dir: "M_attr"
+  images_dir: "UAV-benchmark-M"
+  gt_dir: "UAV-benchmark-MOTD_v1.0/GT"
+  train_sequences: 30
+  test_sequences: 20
+classes:
+  num_classes: 3
+  names:
+    - "car"
+    - "truck"
+    - "bus"
+  mapping_from_visdrone:
+    4: 0  # car -> car
+    5: 0  # van -> car
+    6: 1  # truck -> truck
+    9: 2  # bus -> bus
+image_size: [1024, 1024]
+evaluation:
+  metric: "mAP@0.5"
+  max_dets: 500
+

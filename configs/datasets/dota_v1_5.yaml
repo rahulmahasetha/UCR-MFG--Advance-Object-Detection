@@ -1,0 +1,31 @@
+dataset_name: "DOTA-v1.5"
+root_dir: "dataset/DOTA-v1.5"
+annotation_format: "OBB_CONVERTED_TO_HBB"
+splits:
+  train: "train/images"
+  val: "validation/images"
+  test: "test/images"
+classes:
+  num_classes: 16
+  names:
+    - "plane"
+    - "ship"
+    - "storage-tank"
+    - "baseball-diamond"
+    - "tennis-court"
+    - "basketball-court"
+    - "ground-track-field"
+    - "harbor"
+    - "bridge"
+    - "large-vehicle"
+    - "small-vehicle"
+    - "helicopter"
+    - "roundabout"
+    - "soccer-ball-field"
+    - "swimming-pool"
+    - "container-crane"
+image_size: [1024, 1024]
+evaluation:
+  metric: "mAP@0.5"
+  protocol: "HBB_internal_evaluation_only"
+

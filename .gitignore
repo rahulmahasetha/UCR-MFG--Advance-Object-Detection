@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Datasets and Archives
+dataset/
+data/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Precomputed Caches
+.cache/
+*.cache.pt
+data_cache/
+
+# Checkpoints and Output Weights
+checkpoints/
+*.pth
+*.pt
+
+# Training runs and logs
+runs/
+logs/
+wandb/
+
+# OS specific
+.DS_Store
+Thumbs.db
+

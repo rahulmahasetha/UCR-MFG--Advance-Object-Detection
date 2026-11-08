@@ -1,0 +1,35 @@
+dataset_name: "VisDrone2019-DET"
+root_dir: "dataset/VisDrone2019-DET"
+annotation_format: "HBB"
+splits:
+  train:
+    images: "VisDrone2019-DET-train/images"
+    annotations: "VisDrone2019-DET-train/annotations"
+    num_samples: 6471
+  val:
+    images: "VisDrone2019-DET-val/images"
+    annotations: "VisDrone2019-DET-val/annotations"
+    num_samples: 548
+  test_dev:
+    images: "VisDrone2019-DET-test-dev/images"
+    annotations: "VisDrone2019-DET-test-dev/annotations"
+    num_samples: 1610
+classes:
+  num_classes: 10
+  names:
+    - "pedestrian"
+    - "people"
+    - "bicycle"
+    - "car"
+    - "van"
+    - "truck"
+    - "tricycle"
+    - "awning-tricycle"
+    - "bus"
+    - "motor"
+ignore_category_id: 0
+image_size: [1024, 1024]
+evaluation:
+  metric: "mAP@0.5:0.95"
+  max_dets: 500
+

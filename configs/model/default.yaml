@@ -1,0 +1,40 @@
+model:
+  backbone: "resnet50"
+  pretrained: true
+  fpn_channels: 256
+  graph_dim: 64
+  strides: [8, 16, 32]
+  num_classes: 10
+  uncertainty:
+    dropout_rate: 0.2
+    mc_passes: 10
+    sigma_0_sq: 1.0
+  graph:
+    r_local: 3
+    k_feat: 8
+    alpha_student_t: 1.0
+    epsilon_guard: 1.0e-8
+    f1_block_size: 32
+  router:
+    k_local: 4
+    k_feat: 2
+    k_cross: 2
+    input_dim: 140
+    hidden_dim: 64
+  mpnn:
+    attn_dim: 32
+    hidden_dim: 64
+    out_dim: 256
+  fusion:
+    gate_dim: 256
+loss:
+  lambda_det: 1.0
+  lambda_u: 0.5
+  lambda_graph: 0.1
+  lambda_inst: 0.2
+  lambda_benefit: 0.2
+  lambda_consistency: 0.1
+  benefit_step_interval: 2
+  benefit_quantile: 0.75
+  center_sampling_radius: 1.5
+

@@ -1,0 +1,14 @@
+experiment_name: "ucr_mfg_soda_independent"
+mode: "independent_experiment"
+dataset_config: "configs/datasets/soda_a.yaml"
+model_config: "configs/model/default.yaml"
+train:
+  max_epochs: 100
+  batch_size: 2
+  classes: 9
+checkpoint:
+  save_dir: "checkpoints/soda_independent"
+  save_latest: true
+  save_best: true
+  keep_last_n: 3
+

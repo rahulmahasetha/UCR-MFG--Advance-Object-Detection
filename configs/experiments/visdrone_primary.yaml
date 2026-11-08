@@ -1,0 +1,34 @@
+experiment_name: "ucr_mfg_visdrone_primary"
+mode: "primary_training"
+dataset_config: "configs/datasets/visdrone.yaml"
+model_config: "configs/model/default.yaml"
+train:
+  max_epochs: 150
+  batch_size: 2
+  accumulate_grad_batches: 2
+  optimizer: "AdamW"
+  lr: 0.0001
+  weight_decay: 0.0001
+  scheduler: "CosineAnnealingLR"
+  stages:
+    stage_1:
+      epochs: [1, 30]
+      active_modules: ["backbone", "fpn", "unc_head", "det_head"]
+      losses: ["det", "unc"]
+    stage_2:
+      epochs: [31, 60]
+      active_modules: ["graph_builder"]
+      losses: ["det", "unc", "graph"]
+    stage_3:
+      epochs: [61, 90]
+      active_modules: ["router"]
+      losses: ["det", "unc", "graph", "inst", "benefit"]
+    stage_4:
+      epochs: [91, 150]
+      active_modules: ["mpnn", "fusion"]
+      losses: ["all"]
+checkpoint:
+  save_dir: "checkpoints/visdrone_primary"
+  save_latest: true
+  save_best: true
+  keep_last_n: 3
