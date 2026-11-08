@@ -23,10 +23,14 @@ class TrainingProgressDisplay:
         self.bar_width = width
         self.epoch_start_time = 0.0
         self.training_start_time = time.time()
+        self.last_step_time = 0.0
+        self.step_ema = None
 
     def start_epoch(self, epoch: int) -> None:
         """Call at the start of each training epoch."""
         self.epoch_start_time = time.time()
+        self.last_step_time = 0.0
+        self.step_ema = None
         print(f"\n{'='*78}")
         print(f"🚀 [EPOCH {epoch:03d} / {self.total_epochs:03d}] Active Training Phase")
         print(f"{'='*78}")
@@ -43,14 +47,26 @@ class TrainingProgressDisplay:
         elapsed_epoch = current_time - self.epoch_start_time
         batch_num = batch_idx + 1
 
+        # Smooth EMA for realistic ETA calculation (avoids first-step startup / download distortion)
+        if self.last_step_time > 0:
+            dt = current_time - self.last_step_time
+            if self.step_ema is None:
+                self.step_ema = dt
+            else:
+                self.step_ema = 0.9 * self.step_ema + 0.1 * dt
+        self.last_step_time = current_time
+
         # Percentage & Progress bar
         fraction = batch_num / float(self.num_batches)
         filled = int(round(self.bar_width * fraction))
         bar = "█" * filled + "░" * (self.bar_width - filled)
 
-        # Time estimation
-        rate = elapsed_epoch / max(batch_num, 1)
-        eta_epoch = rate * (self.num_batches - batch_num)
+        # Time estimation using rolling EMA
+        if self.step_ema is not None and batch_num > 1:
+            eta_epoch = self.step_ema * (self.num_batches - batch_num)
+        else:
+            rate = elapsed_epoch / max(batch_num, 1)
+            eta_epoch = rate * (self.num_batches - batch_num)
 
         elapsed_str = self._format_seconds(elapsed_epoch)
         eta_str = self._format_seconds(eta_epoch)

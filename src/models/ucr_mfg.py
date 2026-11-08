@@ -87,7 +87,11 @@ class UCRMFG(nn.Module):
         spatial_shapes = [(f.shape[2], f.shape[3]) for f in features]
 
         # 2. Uncertainty Head forward
-        u_a_list, u_e_list, unc_preds = self.unc_head(features, base_seed, epoch, batch_idx)
+        # Epistemic uncertainty via MC passes is only needed when graph/router are active (Stage >= 2)
+        need_epistemic = (self.current_stage >= 2)
+        u_a_list, u_e_list, unc_preds = self.unc_head(
+            features, base_seed, epoch, batch_idx, compute_epistemic=need_epistemic
+        )
 
         # In Stage 1, bypass graph modules directly to detection head
         if self.current_stage == 1:

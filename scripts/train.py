@@ -75,6 +75,8 @@ def main():
         batch_size=batch_size,
         shuffle=True,
         num_workers=2 if sys.platform != "win32" else 0,
+        persistent_workers=True if sys.platform != "win32" else False,
+        pin_memory=(device.type == "cuda"),
         collate_fn=collate_fn,
         drop_last=True
     )
@@ -103,7 +105,15 @@ def main():
     # 3. Optimizer & Scheduler
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs, eta_min=1e-6)
-    scaler = torch.cuda.amp.GradScaler() if device.type == "cuda" else None
+    use_amp = device.type in ("cuda", "mps")
+    device_type = "cuda" if device.type == "cuda" else ("mps" if device.type == "mps" else "cpu")
+    amp_dtype = torch.float16
+    if device.type == "cuda":
+        scaler = torch.amp.GradScaler("cuda")
+    elif device.type == "mps":
+        scaler = torch.amp.GradScaler("mps")
+    else:
+        scaler = None
 
     # 4. Checkpoint Resumption
     start_epoch = 1
@@ -161,29 +171,50 @@ def main():
                 "pos_masks": pos_m,
             }
 
-            # Forward pass
-            outputs = model(images, base_seed=42, epoch=epoch, batch_idx=batch_idx)
+            # Forward pass & loss computation
+            if use_amp:
+                with torch.autocast(device_type=device_type, dtype=amp_dtype):
+                    outputs = model(images, base_seed=42, epoch=epoch, batch_idx=batch_idx)
 
-            # Benefit distillation gradient (run strictly every 2 steps in Stages 3 & 4)
-            benefit_grads = None
-            if stage >= 3 and (global_step % model_cfg["loss"]["benefit_step_interval"] == 0):
-                # Dense soft-gated forward pass for benefit gradient
-                with torch.enable_grad():
-                    soft_s = [r["s_ij"].clone().requires_grad_(True) for r in outputs["router_data"]]
-                    loss_approx = sum([s.sigmoid().mean() for s in soft_s])
-                    grads = torch.autograd.grad(loss_approx, soft_s, retain_graph=False)
-                    benefit_grads = [-g for g in grads]
+                    benefit_grads = None
+                    if stage >= 3 and (global_step % model_cfg["loss"]["benefit_step_interval"] == 0):
+                        with torch.enable_grad():
+                            soft_s = [r["s_ij"].clone().requires_grad_(True) for r in outputs["router_data"]]
+                            loss_approx = sum([s.sigmoid().mean() for s in soft_s])
+                            grads = torch.autograd.grad(loss_approx, soft_s, retain_graph=False)
+                            benefit_grads = [-g for g in grads]
 
-            # Compute combined multi-task loss
-            loss_dict = loss_fn(outputs, targets, locations, boxes, labels, benefit_grads)
+                    loss_dict = loss_fn(outputs, targets, locations, boxes, labels, benefit_grads)
+            else:
+                outputs = model(images, base_seed=42, epoch=epoch, batch_idx=batch_idx)
+
+                benefit_grads = None
+                if stage >= 3 and (global_step % model_cfg["loss"]["benefit_step_interval"] == 0):
+                    with torch.enable_grad():
+                        soft_s = [r["s_ij"].clone().requires_grad_(True) for r in outputs["router_data"]]
+                        loss_approx = sum([s.sigmoid().mean() for s in soft_s])
+                        grads = torch.autograd.grad(loss_approx, soft_s, retain_graph=False)
+                        benefit_grads = [-g for g in grads]
+
+                loss_dict = loss_fn(outputs, targets, locations, boxes, labels, benefit_grads)
+
             loss_total = loss_dict["loss_total"] / float(accum_steps)
 
-            loss_total.backward()
+            if scaler is not None:
+                scaler.scale(loss_total).backward()
+            else:
+                loss_total.backward()
 
             # Step optimizer upon reaching accumulation threshold
             if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(train_loader):
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
-                optimizer.step()
+                if scaler is not None:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+                    optimizer.step()
                 optimizer.zero_grad()
 
             global_step += 1

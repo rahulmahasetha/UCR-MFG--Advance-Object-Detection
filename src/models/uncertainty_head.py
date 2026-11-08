@@ -125,14 +125,22 @@ class PreGraphUncertaintyHead(nn.Module):
         features: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
         base_seed: int = 42,
         epoch: int = 0,
-        batch_idx: int = 0
+        batch_idx: int = 0,
+        compute_epistemic: bool = True
     ) -> Tuple[List[torch.Tensor], List[torch.Tensor], Dict[str, List[torch.Tensor]]]:
         """Forward pass for multi-scale pyramid (F1, F2, F3).
+        
+        Args:
+            features: Tuple of feature maps (F1, F2, F3).
+            base_seed: Master seed for reproducible dropout.
+            epoch: Current training epoch.
+            batch_idx: Current batch index within the epoch.
+            compute_epistemic: Whether to compute epistemic uncertainty via MC passes (Stage >= 2).
         
         Returns:
             u_a_list: Aleatoric uncertainties [Ua_1, Ua_2, Ua_3]
             u_e_list: Epistemic uncertainties [Ue_1, Ue_2, Ue_3]
-            preds: Dict containing pre-graph outputs (log_var, cls_logits, c_pre) for loss computation
+            preds: Dict containing pre-graph outputs (log_vars, cls_logits, c_pres) for loss computation
         """
         u_a_list, u_e_list = [], []
         log_var_list, cls_logits_list, c_pre_list = [], [], []
@@ -141,7 +149,10 @@ class PreGraphUncertaintyHead(nn.Module):
             log_var, cls_logits, c_pre = self.forward_single(f)
             # Pass detached tensors to avoid unneeded backprop graphs in Ua and Ue
             u_a = self.compute_aleatoric(log_var.detach(), cls_logits.detach(), c_pre.detach())
-            u_e = self.compute_epistemic(f.detach(), base_seed, epoch, batch_idx)
+            if compute_epistemic:
+                u_e = self.compute_epistemic(f.detach(), base_seed, epoch, batch_idx)
+            else:
+                u_e = torch.zeros((f.shape[0], 1, f.shape[2], f.shape[3]), device=f.device, dtype=f.dtype)
 
             u_a_list.append(u_a)
             u_e_list.append(u_e)
