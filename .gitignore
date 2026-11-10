@@ -9,12 +9,16 @@ venv/
 env/
 
 # Datasets and Archives
-dataset/
-data/
+/dataset/
+/data/
 *.zip
 *.tar
 *.tar.gz
 *.tgz
+
+# Source data code must NOT be ignored
+!src/data/
+!src/data/**
 
 # Precomputed Caches
 .cache/
