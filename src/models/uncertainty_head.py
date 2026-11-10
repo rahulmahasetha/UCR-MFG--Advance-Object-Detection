@@ -1,31 +1,37 @@
 import math
-from typing import Tuple, List, Dict
+from typing import Dict, List, Sequence, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-def get_batch_mc_generator(base_seed: int, epoch: int, batch_idx: int, t: int, device: torch.device) -> torch.Generator:
-    """Derives an independent, reproducible random generator per batch and MC forward pass."""
-    seed = (base_seed * 1000003 + epoch * 10007 + batch_idx * 997 + t * 101) & 0x7FFFFFFF
+def mc_generator(base_seed: int, epoch: int, batch_idx: int, device: torch.device) -> torch.Generator:
+    """Reproducible generator for one batch's Monte Carlo dropout passes."""
+    seed = (base_seed * 1000003 + epoch * 10007 + batch_idx * 997) & 0x7FFFFFFF
     gen = torch.Generator(device=device)
     gen.manual_seed(seed)
     return gen
 
 
-def apply_reproducible_dropout(x: torch.Tensor, p: float, generator: torch.Generator) -> torch.Tensor:
-    """Inverted dropout with explicit generator support."""
+def inverted_dropout(x: torch.Tensor, p: float, generator: torch.Generator) -> torch.Tensor:
     if p <= 0.0:
         return x
-    keep_prob = 1.0 - p
-    mask = (torch.rand(x.shape, generator=generator, device=x.device, dtype=x.dtype) < keep_prob)
-    return (x * mask) / keep_prob
+    keep = torch.rand(x.shape, generator=generator, device=x.device, dtype=x.dtype) >= p
+    return x * keep / (1.0 - p)
+
+
+def entropy(logits: torch.Tensor) -> torch.Tensor:
+    log_p = F.log_softmax(logits.float(), dim=1)
+    return -(log_p.exp() * log_p).sum(dim=1, keepdim=True)
 
 
 class PreGraphUncertaintyHead(nn.Module):
-    """Contribution 1: Decoupled Pre-Graph Uncertainty Head.
-    
-    Predicts aleatoric uncertainty Ua and epistemic uncertainty Ue directly from FPN features.
+    """C1: Dual predictive uncertainty estimated from pyramid features before graph reasoning.
+
+    With T Monte Carlo dropout passes the predictive entropy splits into
+    aleatoric = E_t[H(p_t)] and epistemic = H(E_t[p_t]) - E_t[H(p_t)] (mutual information).
+    Ua blends the aleatoric class entropy with a centerness-weighted box variance; both maps lie in [0, 1].
     """
 
     def __init__(
@@ -34,136 +40,64 @@ class PreGraphUncertaintyHead(nn.Module):
         num_classes: int = 10,
         dropout_rate: float = 0.2,
         mc_passes: int = 10,
-        sigma_0_sq: float = 1.0
+        sigma_0_sq: float = 1.0,
     ):
         super().__init__()
         self.num_classes = num_classes
         self.dropout_rate = dropout_rate
         self.mc_passes = mc_passes
         self.sigma_0_sq = sigma_0_sq
-
-        # Shared 2-Conv tower
+        self.log_classes = math.log(num_classes)
         self.tower = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, in_channels, 3, padding=1),
             nn.GroupNorm(32, in_channels),
             nn.SiLU(),
-            nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, in_channels, 3, padding=1),
             nn.GroupNorm(32, in_channels),
-            nn.SiLU()
+            nn.SiLU(),
         )
-
-        # Three independent task heads
-        self.box_var_head = nn.Conv2d(in_channels, 4, kernel_size=1)
-        self.cls_head = nn.Conv2d(in_channels, num_classes, kernel_size=1)
-        self.centerness_head = nn.Conv2d(in_channels, 1, kernel_size=1)
-
-    def forward_single(self, f: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Single deterministic forward pass returning (log_var, cls_logits, c_pre)."""
-        feat = self.tower(f)
-        log_var = self.box_var_head(feat)
-        cls_logits = self.cls_head(feat)
-        c_pre = torch.sigmoid(self.centerness_head(feat))
-        return log_var, cls_logits, c_pre
-
-    def compute_aleatoric(
-        self,
-        log_var: torch.Tensor,
-        cls_logits: torch.Tensor,
-        c_pre: torch.Tensor
-    ) -> torch.Tensor:
-        """Computes normalized aleatoric uncertainty Ua in [0, 1]."""
-        probs = F.softmax(cls_logits, dim=1)
-        entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1, keepdim=True)
-        norm_entropy = entropy / math.log(self.num_classes)
-
-        # Stride-normalized variance average
-        mean_var = torch.mean(torch.exp(log_var.clamp(-10.0, 10.0)), dim=1, keepdim=True)
-        scaled_var = mean_var / (self.sigma_0_sq + mean_var)
-
-        u_a = 0.5 * norm_entropy + 0.5 * (c_pre * scaled_var)
-        return u_a.clamp(0.0, 1.0)
-
-    @torch.no_grad()
-    def compute_epistemic(
-        self,
-        f: torch.Tensor,
-        base_seed: int = 42,
-        epoch: int = 0,
-        batch_idx: int = 0
-    ) -> torch.Tensor:
-        """Computes epistemic uncertainty Ue via Monte Carlo Inverted Dropout without graph tracking."""
-        if not self.training and self.mc_passes <= 1:
-            return torch.zeros((f.shape[0], 1, f.shape[2], f.shape[3]), device=f.device, dtype=f.dtype)
-
-        b, c, h, w = f.shape
-        device = f.device
-        sum_probs = torch.zeros((b, self.num_classes, h, w), device=device, dtype=f.dtype)
-        sum_entropy = torch.zeros((b, 1, h, w), device=device, dtype=f.dtype)
-
-        for t in range(self.mc_passes):
-            gen = get_batch_mc_generator(base_seed, epoch, batch_idx, t, device)
-            f_drop = apply_reproducible_dropout(f, self.dropout_rate, gen)
-            feat = self.tower(f_drop)
-            logits_t = self.cls_head(feat)
-            probs_t = F.softmax(logits_t, dim=1)
-            entropy_t = -torch.sum(probs_t * torch.log(probs_t + 1e-8), dim=1, keepdim=True)
-
-            sum_probs += probs_t
-            sum_entropy += entropy_t
-
-        mean_probs = sum_probs / float(self.mc_passes)
-        mean_entropy = -torch.sum(mean_probs * torch.log(mean_probs + 1e-8), dim=1, keepdim=True)
-        expected_entropy = sum_entropy / float(self.mc_passes)
-
-        # Mutual Information
-        mutual_info = (mean_entropy - expected_entropy).clamp(min=0.0)
-        u_e = mutual_info / math.log(self.num_classes)
-        return u_e.clamp(0.0, 1.0)
+        self.box_var_head = nn.Conv2d(in_channels, 4, 1)
+        self.cls_head = nn.Conv2d(in_channels, num_classes, 1)
+        self.centerness_head = nn.Conv2d(in_channels, 1, 1)
 
     def forward(
         self,
-        features: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-        base_seed: int = 42,
-        epoch: int = 0,
-        batch_idx: int = 0,
-        compute_epistemic: bool = True
+        features: Sequence[torch.Tensor],
+        generator: torch.Generator = None,
+        compute_epistemic: bool = True,
     ) -> Tuple[List[torch.Tensor], List[torch.Tensor], Dict[str, List[torch.Tensor]]]:
-        """Forward pass for multi-scale pyramid (F1, F2, F3).
-        
-        Args:
-            features: Tuple of feature maps (F1, F2, F3).
-            base_seed: Master seed for reproducible dropout.
-            epoch: Current training epoch.
-            batch_idx: Current batch index within the epoch.
-            compute_epistemic: Whether to compute epistemic uncertainty via MC passes (Stage >= 2).
-        
-        Returns:
-            u_a_list: Aleatoric uncertainties [Ua_1, Ua_2, Ua_3]
-            u_e_list: Epistemic uncertainties [Ue_1, Ue_2, Ue_3]
-            preds: Dict containing pre-graph outputs (log_vars, cls_logits, c_pres) for loss computation
-        """
-        u_a_list, u_e_list = [], []
-        log_var_list, cls_logits_list, c_pre_list = [], [], []
+        u_a, u_e = [], []
+        preds = {"log_vars": [], "cls_logits": [], "c_pres": []}
+        use_mc = compute_epistemic and self.mc_passes > 1
 
         for f in features:
-            log_var, cls_logits, c_pre = self.forward_single(f)
-            # Pass detached tensors to avoid unneeded backprop graphs in Ua and Ue
-            u_a = self.compute_aleatoric(log_var.detach(), cls_logits.detach(), c_pre.detach())
-            if compute_epistemic:
-                u_e = self.compute_epistemic(f.detach(), base_seed, epoch, batch_idx)
-            else:
-                u_e = torch.zeros((f.shape[0], 1, f.shape[2], f.shape[3]), device=f.device, dtype=f.dtype)
+            feat = self.tower(f)
+            log_var = self.box_var_head(feat)
+            cls_logits = self.cls_head(feat)
+            c_pre = torch.sigmoid(self.centerness_head(feat))
 
-            u_a_list.append(u_a)
-            u_e_list.append(u_e)
-            log_var_list.append(log_var)
-            cls_logits_list.append(cls_logits)
-            c_pre_list.append(c_pre)
+            with torch.no_grad():
+                if use_mc:
+                    aleatoric_cls, epistemic = self._monte_carlo(f.detach(), generator)
+                else:
+                    aleatoric_cls, epistemic = entropy(cls_logits) / self.log_classes, torch.zeros_like(c_pre)
+                var = log_var.float().clamp(-10.0, 10.0).exp().mean(dim=1, keepdim=True)
+                box_term = c_pre.float() * var / (self.sigma_0_sq + var)
+                u_a.append((0.5 * aleatoric_cls + 0.5 * box_term).clamp(0.0, 1.0))
+                u_e.append(epistemic)
 
-        preds = {
-            "log_vars": log_var_list,
-            "cls_logits": cls_logits_list,
-            "c_pres": c_pre_list,
-        }
-        return u_a_list, u_e_list, preds
+            preds["log_vars"].append(log_var)
+            preds["cls_logits"].append(cls_logits)
+            preds["c_pres"].append(c_pre)
+        return u_a, u_e, preds
 
+    def _monte_carlo(self, f: torch.Tensor, generator: torch.Generator) -> Tuple[torch.Tensor, torch.Tensor]:
+        mean_probs = 0.0
+        mean_entropy = 0.0
+        for _ in range(self.mc_passes):
+            logits = self.cls_head(self.tower(inverted_dropout(f, self.dropout_rate, generator)))
+            mean_probs = mean_probs + F.softmax(logits.float(), dim=1) / self.mc_passes
+            mean_entropy = mean_entropy + entropy(logits) / self.mc_passes
+        total = -(mean_probs * torch.log(mean_probs.clamp(min=1e-12))).sum(dim=1, keepdim=True)
+        epistemic = (total - mean_entropy).clamp(min=0.0)
+        return mean_entropy / self.log_classes, (epistemic / self.log_classes).clamp(0.0, 1.0)

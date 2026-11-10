@@ -17,15 +17,18 @@ class CheckpointIncompatibilityError(Exception):
 
 
 class GracefulInterruptHandler:
-    """Catches SIGINT/SIGTERM, allowing the training loop to safely complete the active batch."""
+    """Catches SIGINT/SIGTERM so training can stop at the next safe point; a second signal exits at once."""
     def __init__(self):
         self.interrupted = False
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
 
     def _handle_signal(self, signum, frame):
+        if self.interrupted:
+            print("\n[INTERRUPT] Second signal received, exiting without saving.")
+            raise KeyboardInterrupt
         name = "SIGINT (Ctrl+C)" if signum == signal.SIGINT else "SIGTERM"
-        print(f"\n[INTERRUPT] Caught {name}! Completing current batch and saving emergency checkpoint...")
+        print(f"\n[INTERRUPT] Caught {name}. Finishing the current optimizer step, then saving (press again to force quit)...")
         self.interrupted = True
 
 
@@ -52,9 +55,14 @@ def create_checkpoint_payload(
     global_step: int,
     current_stage: int,
     best_metric: float,
-    cfg_dict: Dict[str, Any]
+    cfg_dict: Dict[str, Any],
+    resume: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """Assembles the complete industrial-grade checkpoint payload."""
+    """Assembles the complete checkpoint payload.
+
+    `epoch` is the last fully completed epoch. `resume`, when given, marks a mid-epoch save:
+    {"epoch": epoch in progress, "batch": next batch index, "epoch_losses": running loss sums}.
+    """
     config_str = str(sorted(cfg_dict.items()))
     config_hash = hashlib.sha256(config_str.encode("utf-8")).hexdigest()
 
@@ -70,6 +78,7 @@ def create_checkpoint_payload(
         "global_step": global_step,
         "current_stage": current_stage,
         "best_metric": best_metric,
+        "resume": resume,
 
         # 3. PRNG States (Exact Bit-Level Reproducibility)
         "rng_states": {
@@ -77,9 +86,10 @@ def create_checkpoint_payload(
             "numpy": np.random.get_state(),
             "torch_cpu": torch.get_rng_state(),
             "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            "torch_mps": torch.mps.get_rng_state() if torch.backends.mps.is_available() else None,
         },
 
-        # 4. Metadata
+        "config": cfg_dict,
         "metadata": {
             "config_hash": config_hash,
             "torch_version": torch.__version__,
@@ -133,18 +143,26 @@ def load_checkpoint(
         torch.set_rng_state(rng["torch_cpu"])
     if "torch_cuda" in rng and rng["torch_cuda"] is not None and torch.cuda.is_available():
         torch.cuda.set_rng_state_all(rng["torch_cuda"])
+    if rng.get("torch_mps") is not None and torch.backends.mps.is_available():
+        torch.mps.set_rng_state(rng["torch_mps"])
 
-    # Next epoch strictly increments completed epoch
-    start_epoch = checkpoint["epoch"] + 1
+    resume = checkpoint.get("resume")
+    if resume:
+        start_epoch, start_batch = resume["epoch"], resume["batch"]
+    else:
+        start_epoch, start_batch = checkpoint["epoch"] + 1, 0
 
     print(f"[RESUME] Loaded checkpoint from {target_path}:")
-    print(f"  ├── Resumed from Epoch: {checkpoint['epoch']} (Starting Epoch: {start_epoch})")
+    print(f"  ├── Last completed epoch: {checkpoint['epoch']} (continuing at epoch {start_epoch}, batch {start_batch})")
     print(f"  ├── Global Step: {checkpoint.get('global_step', 0)}")
     print(f"  ├── Curriculum Stage: {checkpoint.get('current_stage', 1)}")
     print(f"  └── Best Metric: {checkpoint.get('best_metric', 0.0):.4f}")
 
     return {
         "start_epoch": start_epoch,
+        "start_batch": start_batch,
+        "epoch_losses": dict(resume["epoch_losses"]) if resume else {},
+        "resume_batch_size": resume.get("batch_size") if resume else None,
         "global_step": checkpoint.get("global_step", 0),
         "current_stage": checkpoint.get("current_stage", 1),
         "best_metric": checkpoint.get("best_metric", 0.0),

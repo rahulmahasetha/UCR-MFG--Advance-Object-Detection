@@ -9,16 +9,19 @@ An uncertainty-aware, graph-enhanced object detection architecture for aerial an
 UCR-MFG addresses high visual ambiguity, extreme scale variation, and dense object clusters in low-altitude aerial imagery through four research-grade components:
 
 - **C1: Dual Predictive Uncertainty Modeling (`src/models/uncertainty_head.py`)**
-  - **Aleatoric Uncertainty ($U^a \in [0, 1]$):** Combines normalized classification entropy with stride-normalized bounding-box variances, weighted by an independent pre-graph centerness scalar $c_i^{\text{pre}}$.
-  - **Epistemic Uncertainty ($U^e \in [0, 1]$):** Estimated via Monte Carlo Inverted Dropout ($T=10$ passes) using a batch-varying reproducible pseudo-random generator policy.
+  - **Aleatoric Uncertainty ($U^a \in [0, 1]$):** Expected entropy over $T$ MC-dropout passes, $\mathbb{E}_t[H(p_t)]$, blended with a centerness-weighted box variance.
+  - **Epistemic Uncertainty ($U^e \in [0, 1]$):** Mutual information $H(\mathbb{E}_t[p_t]) - \mathbb{E}_t[H(p_t)]$ from Monte Carlo inverted dropout ($T=10$) with reproducible per-batch generators.
+  - Every detection is returned with its $U^a$, $U^e$ and a box standard deviation from the probabilistic head (log-normal box model).
 - **C2: Uncertainty-Conditioned Relational Routing (`src/models/router.py`)**
-  - Selects informative subgraphs from multi-scale candidate edges using a 140-dimensional feature vector.
-  - Employs Straight-Through Top-K routing with dual supervision: weak instance supervision ($L_{\text{inst}}$) and periodic dense-pass benefit distillation ($L_{\text{benefit}}$).
+  - Scores every candidate edge from a 140-d descriptor (receiver/sender features, Student-t affinity, $U^a$/$U^e$ of both ends, geometry, edge type).
+  - Vectorised per-receiver, per-type Straight-Through Top-K whose budget grows with receiver uncertainty.
+  - Supervised by weak instance BCE ($L_{\text{inst}}$) and benefit distillation ($L_{\text{benefit}}$): every `benefit_step_interval` steps a dense pass measures $b_{ij} = -\partial L_{\text{det}} / \partial m_{ij}$ for all candidates.
 - **C3: Benefit-Aware Multi-Scale Message Passing (`src/models/message_passing.py`)**
-  - Aggregates features in a compact 64-dimensional projected space using masked attention and dynamic benefit message gates ($g_{ij}$), followed by recurrent GRU node updates and linear expansion back to $C=256$.
+  - Masked attention plus a benefit gate $g_{ij} = \sigma(f(h_i, v_j, s_{ij}, U^a_i, U^e_i, U^e_j))$ over routed edges only, a GRU node update in 64-d and expansion back to $C=256$.
+  - Cross-scale edges link every fine location to its parent and every parent to all four children.
   - Regularized by object-centric cross-scale prediction KL consistency ($L_{\text{consistency}}$) with collision resolution and NaN-safe autograd protection.
 - **C4: Uncertainty-Aware Feature Fusion (`src/models/fusion.py`)**
-  - Channel-wise learnable gating mechanism ($\boldsymbol{\lambda}_i \in (0, 1)^{256}$) dynamically fusing visual and graph-enhanced representations.
+  - Channel-wise gate $\boldsymbol{\lambda}_i \in (0, 1)^{256}$ predicted from $[F, H, U^a, U^e]$, initialised to favour the visual features.
 
 ---
 
@@ -147,8 +150,9 @@ python scripts/train.py --config configs/experiments/visdrone_primary.yaml
 - **Stage Progression:**
   - **Stage 1 (Epochs 1–30):** Backbone, FPN, PreGraphUncertaintyHead, and DetectionHead ($L_{\text{det}} + \lambda_u L_u$).
   - **Stage 2 (Epochs 31–60):** Enables GraphBuilder ($+ \lambda_g L_{\text{graph}}$).
-  - **Stage 3 (Epochs 61–90):** Enables UCRouter ($+ \lambda_{\text{inst}} L_{\text{inst}} + \lambda_{\text{benefit}} L_{\text{benefit}}$ every 2 steps).
-  - **Stage 4 (Epochs 91–150):** Full end-to-end BenefitAwareMPNN and UncertaintyFusionGate ($+ \lambda_c L_{\text{consistency}}$) with cosine annealing to $10^{-6}$.
+  - **Stage 3 (Epochs 61–90):** Enables UCRouter and BenefitAwareMPNN; the head sees $F + 0.1 H$ so routing receives a detection signal ($+ \lambda_{\text{inst}} L_{\text{inst}} + \lambda_{\text{benefit}} L_{\text{benefit}}$ every 2 steps).
+  - **Stage 4 (Epochs 91–150):** Enables the UncertaintyFusionGate ($+ \lambda_c L_{\text{consistency}}$) with cosine annealing to $10^{-6}$.
+- **Validation:** VisDrone val mAP every `val.interval` epochs; the best model is saved as `best.pth`.
 
 ### Step 4: Resume Interrupted Training
 The checkpoint engine atomically writes `latest.pth` and `best.pth`. If a job is preempted or stopped with `Ctrl+C`:
@@ -159,7 +163,11 @@ python scripts/train.py --config configs/experiments/visdrone_primary.yaml --res
 # Or resume from a custom checkpoint path
 python scripts/train.py --config configs/experiments/visdrone_primary.yaml --resume checkpoints/visdrone_primary/epoch_045.pth
 ```
-Training resumes at `epoch + 1` with optimizer momentum, learning rate, AMP scaler, curriculum stage, and random number generator states fully restored.
+Training continues from the exact epoch **and batch** that was saved; completed batches are skipped without being loaded.
+- **Ctrl+C / SIGTERM:** finishes the current optimizer step, saves `latest.pth` and `interrupted.pth`, and exits. Press Ctrl+C twice to quit immediately without saving.
+- **Periodic saves:** `latest.pth` is also written every `checkpoint.save_every_steps` batches (default 500; override with `--save-every N`, `0` disables), so a crash or power loss costs at most that many batches.
+- **Exact continuation:** the shuffle order depends only on (seed, epoch) and each sample's augmentation has its own seed, so the resumed batches are the ones the interrupted run would have seen. Optimizer momentum, learning rate, AMP scaler, curriculum stage, running epoch losses and RNG states are restored.
+- Resume with the same `--batch-size` and `--accumulate-grad-batches` as the saved run; a mismatch is rejected.
 
 ### Step 5: Zero-Shot Cross-Domain Evaluation on UAVDT
 Evaluate the frozen VisDrone model on UAVDT test sequences without fine-tuning:
@@ -169,7 +177,7 @@ python scripts/eval.py \
   --weights checkpoints/visdrone_primary/best.pth \
   --split test
 ```
-Computes Detection Expected Calibration Error (D-ECE) and mAP over the mapped 3-class vehicle ontology (`car`, `truck`, `bus`).
+Reports COCO-style mAP@[.5:.95], AP50, AP75, APs/APm/APl, D-ECE and the AUROC of $U^a$, $U^e$, box std and $1 -$ score for separating false from true detections, over the mapped 3-class vehicle ontology (`car`, `truck`, `bus`). The model and curriculum stage are rebuilt from the checkpoint.
 
 ### Step 6: In-Domain Test-Dev Evaluation
 Run the final one-time blind evaluation on VisDrone `test-dev`:
@@ -179,6 +187,21 @@ python scripts/eval.py \
   --weights checkpoints/visdrone_primary/best.pth \
   --split test_dev
 ```
+
+### Step 7: Ablations and Router Diagnostic
+Ablation switches live in `configs/model/default.yaml`:
+
+| Switch | Ablation |
+|---|---|
+| `router.enabled: false` | Dense MFG graph, every candidate edge passes messages |
+| `router.use_uncertainty: false` | Router without $U^a$/$U^e$ (scores and budgets) |
+| `mpnn.benefit_gate: false` | Message passing without the benefit gate |
+| `fusion.mode: fixed` / `add` | Fixed 0.5 fusion / plain addition instead of the C4 gate |
+
+```bash
+python scripts/oracle_router_pilot.py --weights checkpoints/visdrone_primary/best.pth --samples 50
+```
+Compares router precision/recall against a ground-truth same-object oracle per edge type.
 
 ---
 
@@ -219,26 +242,29 @@ ucr_mfg/
 │   │   ├── router.py           # C2: 140-d UCRouter with Straight-Through Top-K
 │   │   ├── message_passing.py  # C3: BenefitAwareMPNN (64-d attention -> 256-d expansion)
 │   │   ├── fusion.py           # C4: UncertaintyFusionGate (channel-wise lambda_i)
-│   │   ├── detection_head.py   # Decoupled FCOS Cls, Reg, Centerness towers
+│   │   ├── detection_head.py   # Probabilistic FCOS head (cls, ltrb, centerness, box log-variance)
+│   │   ├── graph_ops.py        # Graph/Routing containers, segment softmax, pyramid reshaping
+│   │   ├── postprocess.py      # Decoding + NMS with per-detection uncertainty
 │   │   └── ucr_mfg.py          # End-to-end staged UCR-MFG detector
 │   ├── losses/
 │   │   ├── detection_loss.py   # Focal + CIoU + Centerness
-│   │   ├── uncertainty_loss.py # Stride-normalized box NLL + Cls NLL
+│   │   ├── uncertainty_loss.py # Log-space box NLL + Cls NLL
 │   │   ├── graph_loss.py       # Dirichlet Laplacian Energy
 │   │   ├── router_loss.py      # Weak instance BCE + Benefit distillation
 │   │   ├── consistency_loss.py # Object-centric prediction KL consistency
 │   │   └── total_loss.py       # Multi-task objective for all 4 curriculum stages
+│   ├── engine.py               # Target assignment, benefit measurement, evaluation loop
 │   └── utils/
 │       ├── checkpoint.py       # Atomic saving, full state, graceful interrupt
 │       ├── progress.py         # Live terminal animated progress display
-│       ├── metrics.py          # D-ECE with false positives & mAP calculation
+│       ├── metrics.py          # COCO-style mAP, D-ECE, uncertainty AUROC
 │       └── bootstrap.py        # Paired bootstrap test & Holm-Bonferroni correction
 ├── scripts/
 │   ├── train.py                # 4-stage training script with resume support
 │   ├── eval.py                 # Evaluation script for VisDrone, UAVDT, DOTA
 │   ├── validate_data.py        # CLI dataset integrity audit tool
 │   └── oracle_router_pilot.py  # Diagnostic GT-instance upper bound
-├── tests/                      # Automated test suite (17 passed unit tests)
+├── tests/                      # Automated test suite
 ├── pyproject.toml              # Project metadata & pytest configuration
 ├── requirements.txt            # Python dependencies
 └── README.md                   # Complete reproduction & execution guide

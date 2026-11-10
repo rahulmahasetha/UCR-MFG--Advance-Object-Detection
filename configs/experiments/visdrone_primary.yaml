@@ -27,8 +27,13 @@ train:
       epochs: [91, 150]
       active_modules: ["mpnn", "fusion"]
       losses: ["all"]
+val:
+  interval: 5
+  batch_size: 2
+  max_batches: null
 checkpoint:
   save_dir: "checkpoints/visdrone_primary"
+  save_every_steps: 500   # mid-epoch latest.pth every N batches (~10-20 min on a 16 GB Mac); 0 disables
   save_latest: true
   save_best: true
   keep_last_n: 3

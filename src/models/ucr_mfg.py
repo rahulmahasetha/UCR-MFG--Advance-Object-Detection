@@ -1,200 +1,109 @@
-from typing import Tuple, List, Dict, Any, Optional
+from typing import Any, Dict, Optional, Sequence
+
 import torch
 import torch.nn as nn
 
 from src.models.backbone import ResNetFPNBackbone
-from src.models.uncertainty_head import PreGraphUncertaintyHead
-from src.models.graph_builder import MultiScaleGraphBuilder
-from src.models.router import UCRouter
-from src.models.message_passing import BenefitAwareMPNN
-from src.models.fusion import UncertaintyFusionGate
 from src.models.detection_head import FCOSHead
+from src.models.fusion import UncertaintyFusionGate
+from src.models.graph_builder import MultiScaleGraphBuilder
+from src.models.graph_ops import flatten_levels, to_pyramid
+from src.models.message_passing import BenefitAwareMPNN
+from src.models.router import UCRouter
+from src.models.uncertainty_head import PreGraphUncertaintyHead
 
 
 class UCRMFG(nn.Module):
-    """UCR-MFG: Uncertainty-Conditioned Relational Routing for Multi-Scale Fuzzy Graph Object Detection."""
+    """UCR-MFG: Uncertainty-Conditioned Relational Routing for Multi-Scale Fuzzy Graph Object Detection.
+
+    Curriculum stages: 1 detector + C1, 2 adds the fuzzy graph, 3 adds C2 + C3 with a small fixed
+    residual of graph features, 4 enables the C4 fusion gate.
+    """
 
     def __init__(
         self,
         num_classes: int = 10,
         fpn_channels: int = 256,
         graph_dim: int = 64,
-        strides: List[int] = [8, 16, 32],
-        dropout_rate: float = 0.2,
-        mc_passes: int = 10,
-        pretrained: bool = False
+        strides: Sequence[int] = (8, 16, 32),
+        pretrained: bool = False,
+        uncertainty: Optional[Dict[str, Any]] = None,
+        graph: Optional[Dict[str, Any]] = None,
+        router: Optional[Dict[str, Any]] = None,
+        mpnn: Optional[Dict[str, Any]] = None,
+        fusion_mode: str = "gate",
+        stage3_residual: float = 0.1,
     ):
         super().__init__()
         self.num_classes = num_classes
-        self.strides = strides
-        self.current_stage = 4  # Default to full system; configured during staged training
+        self.strides = list(strides)
+        self.stage = 4
+        self.stage3_residual = stage3_residual
 
-        # 1. Primary Backbone & FPN
         self.backbone = ResNetFPNBackbone(pretrained=pretrained, out_channels=fpn_channels)
+        self.unc_head = PreGraphUncertaintyHead(fpn_channels, num_classes, **(uncertainty or {}))
+        self.graph_builder = MultiScaleGraphBuilder(fpn_channels, graph_dim, self.strides, **(graph or {}))
+        self.router = UCRouter(graph_dim, **(router or {}))
+        self.mpnn = BenefitAwareMPNN(graph_dim, fpn_channels, **(mpnn or {}))
+        self.fusion_gate = UncertaintyFusionGate(fpn_channels, mode=fusion_mode)
+        self.det_head = FCOSHead(fpn_channels, num_classes, self.strides)
 
-        # 2. Contribution 1: Decoupled Pre-Graph Uncertainty Head
-        self.unc_head = PreGraphUncertaintyHead(
-            in_channels=fpn_channels,
+    @classmethod
+    def from_config(cls, cfg: Dict[str, Any], num_classes: int) -> "UCRMFG":
+        m = cfg["model"]
+        r, g = m.get("router", {}), m.get("graph", {})
+        return cls(
             num_classes=num_classes,
-            dropout_rate=dropout_rate,
-            mc_passes=mc_passes
-        )
-
-        # 3. Multi-Scale Graph Builder
-        self.graph_builder = MultiScaleGraphBuilder(
-            in_channels=fpn_channels,
-            graph_dim=graph_dim
-        )
-
-        # 4. Contribution 2: Uncertainty-Conditioned Relational Router
-        self.router = UCRouter(
-            input_dim=140,
-            hidden_dim=graph_dim
-        )
-
-        # 5. Contribution 3: Benefit-Aware Multi-Scale Message Passing
-        self.mpnn = BenefitAwareMPNN(
-            graph_dim=graph_dim,
-            out_channels=fpn_channels
-        )
-
-        # 6. Contribution 4: Uncertainty-Aware Feature Fusion Gate
-        self.fusion_gate = UncertaintyFusionGate(channels=fpn_channels)
-
-        # 7. Downstream FCOS Detection Head
-        self.det_head = FCOSHead(
-            in_channels=fpn_channels,
-            num_classes=num_classes,
-            strides=strides
+            fpn_channels=m["fpn_channels"],
+            graph_dim=m["graph_dim"],
+            strides=m["strides"],
+            pretrained=m.get("pretrained", False),
+            uncertainty=m.get("uncertainty"),
+            graph={k: g[k] for k in ("r_local", "k_feat", "alpha", "block_size") if k in g},
+            router={
+                "hidden_dim": r.get("hidden_dim", 64),
+                "budgets": (r.get("k_local", 4), r.get("k_feat", 2), r.get("k_cross", 2), r.get("k_cross", 2)),
+                "k_gain": r.get("k_gain", 2.0),
+                "use_uncertainty": r.get("use_uncertainty", True),
+                "enabled": r.get("enabled", True),
+            },
+            mpnn={"use_gate": m.get("mpnn", {}).get("benefit_gate", True)},
+            fusion_mode=m.get("fusion", {}).get("mode", "gate"),
+            stage3_residual=m.get("fusion", {}).get("stage3_residual", 0.1),
         )
 
     def set_curriculum_stage(self, stage: int) -> None:
-        """Sets the active curriculum training stage (1, 2, 3, or 4)."""
-        self.current_stage = stage
+        if stage not in (1, 2, 3, 4):
+            raise ValueError(f"stage must be 1-4, got {stage}")
+        self.stage = stage
 
     def forward(
         self,
         images: torch.Tensor,
-        base_seed: int = 42,
-        epoch: int = 0,
-        batch_idx: int = 0
+        generator: Optional[torch.Generator] = None,
+        dense_routing: bool = False,
     ) -> Dict[str, Any]:
-        """Full end-to-end forward pass through UCR-MFG."""
-        batch_size = images.shape[0]
+        stage = self.stage
+        features = list(self.backbone(images))
+        u_a, u_e, unc_preds = self.unc_head(features, generator, compute_epistemic=stage >= 2 or not self.training)
+        out = {"stage": stage, "u_a": u_a, "u_e": u_e, "unc_preds": unc_preds, "graph": None, "routing": None}
 
-        # 1. Backbone forward: F1, F2, F3
-        features = self.backbone(images)  # Tuple of [B, 256, H_k, W_k]
-        spatial_shapes = [(f.shape[2], f.shape[3]) for f in features]
-
-        # 2. Uncertainty Head forward
-        # Epistemic uncertainty via MC passes is only needed when graph/router are active (Stage >= 2)
-        need_epistemic = (self.current_stage >= 2)
-        u_a_list, u_e_list, unc_preds = self.unc_head(
-            features, base_seed, epoch, batch_idx, compute_epistemic=need_epistemic
-        )
-
-        # In Stage 1, bypass graph modules directly to detection head
-        if self.current_stage == 1:
-            cls_preds, reg_preds, cen_preds = self.det_head(list(features))
-            return {
-                "cls_preds": cls_preds,
-                "reg_preds": reg_preds,
-                "cen_preds": cen_preds,
-                "features": features,
-                "u_a": u_a_list,
-                "u_e": u_e_list,
-                "unc_preds": unc_preds,
-                "graph_data": None,
-                "router_data": None,
-                "stage": 1,
-            }
-
-        # 3. Candidate Graph Construction
-        graph_data = self.graph_builder(features)
-
-        # In Stage 2, graph regularization is active, router is bypassed
-        if self.current_stage == 2:
-            cls_preds, reg_preds, cen_preds = self.det_head(list(features))
-            return {
-                "cls_preds": cls_preds,
-                "reg_preds": reg_preds,
-                "cen_preds": cen_preds,
-                "features": features,
-                "u_a": u_a_list,
-                "u_e": u_e_list,
-                "unc_preds": unc_preds,
-                "graph_data": graph_data,
-                "router_data": None,
-                "stage": 2,
-            }
-
-        # 4. Uncertainty-Conditioned Relational Routing
-        router_outputs = []
-        h_pyramids = []
-
-        for b in range(batch_size):
-            g_b = graph_data[b]
-
-            # Flatten uncertainties for this sample
-            ua_flat = torch.cat([u_a_list[i][b, 0].reshape(-1) for i in range(3)], dim=0)
-            ue_flat = torch.cat([u_e_list[i][b, 0].reshape(-1) for i in range(3)], dim=0)
-
-            # Route edges
-            r_out = self.router(g_b, ua_flat, ue_flat)
-            router_outputs.append(r_out)
-
-            # 5. Benefit-Aware Message Passing
-            h_b = self.mpnn(
-                nodes=g_b["nodes"],
-                edge_index=r_out["edge_index"],
-                m_st=r_out["m_st"],
-                s_ij=r_out["s_ij"],
-                ue_flat=ue_flat,
-                scale_splits=g_b["scale_splits"],
-                spatial_shapes=spatial_shapes
+        fused = features
+        if stage >= 3 or (stage == 2 and self.training):
+            out["graph"] = graph = self.graph_builder(features)
+        if stage >= 3:
+            ua, ue = flatten_levels(u_a).squeeze(1), flatten_levels(u_e).squeeze(1)
+            routing = self.router(graph, ua, ue)
+            active = slice(None) if dense_routing else routing.selected
+            h = self.mpnn(
+                graph.nodes, graph.edge_index[:, active], routing.mask[active], routing.scores[active], ua, ue
             )
-            h_pyramids.append(h_b)
+            h = [x.to(f.dtype) for x, f in zip(to_pyramid(h, graph.batch_size, graph.shapes), features)]
+            if stage == 3:
+                fused = [f + self.stage3_residual * x for f, x in zip(features, h)]
+            else:
+                fused = self.fusion_gate(features, h, u_a, u_e)
+            out["routing"] = routing
 
-        # Batch-collate graph-enhanced features H1, H2, H3
-        h_batched = [
-            torch.cat([h_pyramids[b][lvl] for b in range(batch_size)], dim=0)
-            for lvl in range(3)
-        ]
-
-        # In Stage 3, router is supervised, but features are visual-only for stability
-        if self.current_stage == 3:
-            cls_preds, reg_preds, cen_preds = self.det_head(list(features))
-            return {
-                "cls_preds": cls_preds,
-                "reg_preds": reg_preds,
-                "cen_preds": cen_preds,
-                "features": features,
-                "u_a": u_a_list,
-                "u_e": u_e_list,
-                "unc_preds": unc_preds,
-                "graph_data": graph_data,
-                "router_data": router_outputs,
-                "stage": 3,
-            }
-
-        # 6. Stage 4: Uncertainty-Aware Feature Fusion (Zi = λi * Fi + (1 - λi) * Hi)
-        z_features = self.fusion_gate(list(features), h_batched, u_a_list, u_e_list)
-
-        # 7. Downstream FCOS Head on Fused Features Z
-        cls_preds, reg_preds, cen_preds = self.det_head(z_features)
-
-        return {
-            "cls_preds": cls_preds,
-            "reg_preds": reg_preds,
-            "cen_preds": cen_preds,
-            "features": features,
-            "fused_features": z_features,
-            "h_features": h_batched,
-            "u_a": u_a_list,
-            "u_e": u_e_list,
-            "unc_preds": unc_preds,
-            "graph_data": graph_data,
-            "router_data": router_outputs,
-            "stage": 4,
-        }
-
+        out["head"] = self.det_head(fused)
+        return out

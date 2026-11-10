@@ -1,254 +1,172 @@
-from typing import Tuple, List, Dict, Any
+from typing import Dict, List, Sequence, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.models.graph_ops import BOTTOM_UP, KNN, LOCAL, TOP_DOWN, Graph, flatten_levels, segment_softmax
+
+
+def edge_geometry(dxy: torch.Tensor) -> torch.Tensor:
+    """Bounded direction plus log distance, in receiver grid units."""
+    dist = dxy.norm(dim=-1, keepdim=True)
+    return torch.cat([dxy / (1.0 + dist), torch.log1p(dist)], dim=-1)
+
 
 class MultiScaleGraphBuilder(nn.Module):
-    """Constructs multi-scale candidate graph with spatial block partitioning and Student-t similarity."""
+    """Candidate multi-scale fuzzy graph over pyramid locations.
+
+    Candidates are local windows, block-partitioned feature kNN and parent/child cross-scale links,
+    weighted by a heavy-tailed Student-t affinity so ambiguous pairs keep a small non-zero link.
+    """
 
     def __init__(
         self,
         in_channels: int = 256,
         graph_dim: int = 64,
+        strides: Sequence[int] = (8, 16, 32),
         r_local: int = 3,
         k_feat: int = 8,
         alpha: float = 1.0,
-        eps: float = 1e-8,
-        f1_block_size: int = 32
+        block_size: int = 32,
     ):
         super().__init__()
-        self.graph_dim = graph_dim
+        self.strides = tuple(strides)
         self.r_local = r_local
         self.k_feat = k_feat
         self.alpha = alpha
-        self.eps = eps
-        self.f1_block_size = f1_block_size
+        self.block_size = block_size
+        self.node_proj = nn.Sequential(nn.Linear(in_channels, graph_dim), nn.LayerNorm(graph_dim))
+        self._static_cache: Dict[Tuple, Tuple] = {}
 
-        # Node projection: 256 -> 64
-        self.node_proj = nn.Sequential(
-            nn.Linear(in_channels, graph_dim),
-            nn.LayerNorm(graph_dim)
+    def forward(self, features: Sequence[torch.Tensor]) -> Graph:
+        batch_size = features[0].shape[0]
+        device = features[0].device
+        shapes = [tuple(f.shape[-2:]) for f in features]
+        positions, offsets, (s_edges, s_types, s_geom) = self._static(shapes, device)
+        n = positions.shape[0]
+
+        nodes = self.node_proj(flatten_levels(features))
+        shift = torch.arange(batch_size, device=device).view(1, -1, 1) * n
+        edges = [(s_edges.unsqueeze(1) + shift).reshape(2, -1)]
+        types = [s_types.repeat(batch_size)]
+        geoms = [s_geom.repeat(batch_size, 1)]
+
+        per_image = nodes.view(batch_size, n, -1)
+        for (h, w), off in zip(shapes, offsets):
+            e, g = self._knn(per_image[:, off:off + h * w], h, w, off, n)
+            edges.append(e)
+            types.append(torch.full((e.shape[1],), KNN, dtype=torch.long, device=device))
+            geoms.append(g)
+
+        edge_index = torch.cat(edges, dim=1)
+        kij, wij = self._affinity(nodes, edge_index)
+        return Graph(
+            nodes=nodes,
+            edge_index=edge_index,
+            edge_types=torch.cat(types),
+            edge_geom=torch.cat(geoms),
+            kij=kij,
+            wij=wij,
+            positions=positions,
+            shapes=shapes,
+            batch_size=batch_size,
         )
 
-    def project_nodes(self, f: torch.Tensor) -> torch.Tensor:
-        """Projects feature map [B, C, H, W] to [B, N, graph_dim] where N = H * W."""
-        b, c, h, w = f.shape
-        f_flat = f.permute(0, 2, 3, 1).reshape(b, h * w, c)
-        return self.node_proj(f_flat)
-
-    @torch.no_grad()
-    def build_local_edges(self, h: int, w: int, offset: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Builds local spatial window edges within radius r_local."""
-        y, x = torch.meshgrid(torch.arange(h, device=device), torch.arange(w, device=device), indexing="ij")
-        y_flat = y.reshape(-1)
-        x_flat = x.reshape(-1)
-        num_nodes = h * w
-
-        sources, targets, deltas = [], [], []
-        for dy in range(-self.r_local, self.r_local + 1):
-            for dx in range(-self.r_local, self.r_local + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                ny = y_flat + dy
-                nx = x_flat + dx
-                valid = (ny >= 0) & (ny < h) & (nx >= 0) & (nx < w)
-                src = torch.nonzero(valid).squeeze(1)
-                tgt = ny[valid] * w + nx[valid]
-
-                sources.append(src + offset)
-                targets.append(tgt + offset)
-
-                dist = torch.sqrt(torch.tensor(dx**2 + dy**2, device=device, dtype=torch.float32))
-                delta = torch.tensor([float(dx), float(dy), torch.log(1.0 + dist)], device=device).unsqueeze(0).repeat(len(src), 1)
-                deltas.append(delta)
-
-        if not sources:
-            return torch.empty((2, 0), dtype=torch.long, device=device), torch.empty((0, 3), dtype=torch.float32, device=device)
-
-        edge_index = torch.stack([torch.cat(sources), torch.cat(targets)], dim=0)
-        edge_deltas = torch.cat(deltas, dim=0)
-        return edge_index, edge_deltas
-
-    @torch.no_grad()
-    def build_knn_edges(
-        self,
-        node_feats: torch.Tensor,
-        h: int,
-        w: int,
-        offset: int
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Computes feature-space kNN edges with spatial block partitioning on high-res grids."""
-        device = node_feats.device
-        norm_feats = F.normalize(node_feats, p=2, dim=-1)
-
-        # Spatial block partitioning
-        bs = self.f1_block_size
-        if h > bs or w > bs:
-            sources, targets = [], []
-            for by in range(0, h, bs):
-                for bx in range(0, w, bs):
-                    # Get node indices in block
-                    y_indices = torch.arange(by, min(by + bs, h), device=device)
-                    x_indices = torch.arange(bx, min(bx + bs, w), device=device)
-                    grid_y, grid_x = torch.meshgrid(y_indices, x_indices, indexing="ij")
-                    block_nodes = (grid_y * w + grid_x).reshape(-1)
-
-                    block_feats = norm_feats[block_nodes]
-                    sim = torch.mm(block_feats, block_feats.t())
-                    sim.fill_diagonal_(-float("inf"))
-                    k = min(self.k_feat, len(block_nodes) - 1)
-                    if k <= 0:
-                        continue
-                    _, topk_idx = torch.topk(sim, k=k, dim=1)
-
-                    src_b = block_nodes.unsqueeze(1).repeat(1, k).reshape(-1)
-                    tgt_b = block_nodes[topk_idx.reshape(-1)]
-                    sources.append(src_b + offset)
-                    targets.append(tgt_b + offset)
-
-            if not sources:
-                return torch.empty((2, 0), dtype=torch.long, device=device), torch.empty((0, 3), dtype=torch.float32, device=device)
-
-            edge_index = torch.stack([torch.cat(sources), torch.cat(targets)], dim=0)
-        else:
-            sim = torch.mm(norm_feats, norm_feats.t())
-            sim.fill_diagonal_(-float("inf"))
-            k = min(self.k_feat, norm_feats.shape[0] - 1)
-            _, topk_idx = torch.topk(sim, k=k, dim=1)
-
-            src = torch.arange(norm_feats.shape[0], device=device).unsqueeze(1).repeat(1, k).reshape(-1)
-            tgt = topk_idx.reshape(-1)
-            edge_index = torch.stack([src + offset, tgt + offset], dim=0)
-
-        # Spatial geometric delta for kNN
-        deltas = torch.zeros((edge_index.shape[1], 3), device=device, dtype=torch.float32)
-        return edge_index, deltas
-
-    @torch.no_grad()
-    def build_cross_scale_edges(
-        self,
-        h1: int, w1: int, offset1: int,
-        h2: int, w2: int, offset2: int,
-        device: torch.device
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Builds bidirectional cross-scale parent/child edges."""
-        y2, x2 = torch.meshgrid(torch.arange(h2, device=device), torch.arange(w2, device=device), indexing="ij")
-        y2_flat = y2.reshape(-1)
-        x2_flat = x2.reshape(-1)
-
-        # Scale 2 to Scale 1 (stride 2x parent-child)
-        y1_proj = (y2_flat * 2).clamp(0, h1 - 1)
-        x1_proj = (x2_flat * 2).clamp(0, w1 - 1)
-
-        src_p2c = y2_flat * w2 + x2_flat + offset2
-        tgt_p2c = y1_proj * w1 + x1_proj + offset1
-
-        # Child to parent
-        src_c2p = tgt_p2c
-        tgt_c2p = src_p2c
-
-        edge_index = torch.stack([
-            torch.cat([src_p2c, src_c2p]),
-            torch.cat([tgt_p2c, tgt_c2p])
-        ], dim=0)
-
-        deltas = torch.zeros((edge_index.shape[1], 3), device=device, dtype=torch.float32)
-        return edge_index, deltas
-
-    def compute_student_t_weights(self, edge_index: torch.Tensor, all_nodes: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Computes Student-t similarity kernel kij and normalized edge weights wij."""
-        src, tgt = edge_index[0], edge_index[1]
-        diff = all_nodes[src] - all_nodes[tgt]
-        sq_dist = torch.sum(diff ** 2, dim=-1)
-
-        kij = torch.pow(1.0 + sq_dist / self.alpha, -(self.alpha + 1.0) / 2.0)
-
-        # Softmax normalization per source node
-        # Safe scatter-sum normalization
-        src_max = torch.zeros(all_nodes.shape[0], device=all_nodes.device, dtype=all_nodes.dtype)
-        src_max.scatter_reduce_(0, src, kij, reduce="amax", include_self=False)
-        exp_k = torch.exp(kij - src_max[src])
-
-        src_sum = torch.zeros(all_nodes.shape[0], device=all_nodes.device, dtype=all_nodes.dtype)
-        src_sum.scatter_add_(0, src, exp_k)
-        wij = exp_k / (src_sum[src] + self.eps)
-
+    def _affinity(self, nodes: torch.Tensor, edge_index: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        sq_dist = (nodes[edge_index[0]] - nodes[edge_index[1]]).float().pow(2).sum(-1)
+        kij = (1.0 + sq_dist / self.alpha).pow(-(self.alpha + 1.0) / 2.0)
+        wij = segment_softmax(kij, edge_index[0], nodes.shape[0])
         return kij, wij
 
-    def forward(
-        self,
-        features: Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-    ) -> List[Dict[str, Any]]:
-        """Constructs candidate graphs for a batch of multi-scale pyramid features."""
-        batch_size = features[0].shape[0]
-        h1, w1 = features[0].shape[-2:]
-        h2, w2 = features[1].shape[-2:]
-        h3, w3 = features[2].shape[-2:]
-        device = features[0].device
+    @torch.no_grad()
+    def _knn(self, x: torch.Tensor, h: int, w: int, offset: int, n: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        batch_size, device = x.shape[0], x.device
+        bh, bw = min(self.block_size, h), min(self.block_size, w)
+        gh, gw = -(-h // bh), -(-w // bw)
+        ids = torch.full((gh * bh, gw * bw), -1, dtype=torch.long, device=device)
+        ids[:h, :w] = torch.arange(h * w, device=device).view(h, w)
+        ids = ids.view(gh, bh, gw, bw).permute(0, 2, 1, 3).reshape(gh * gw, bh * bw)
+        block = ids.shape[1]
+        k = min(self.k_feat, block - 1)
+        if k <= 0:
+            return torch.empty((2, 0), dtype=torch.long, device=device), torch.empty((0, 3), device=device)
 
-        # Node counts and offsets per scale
-        n1 = h1 * w1
-        n2 = h2 * w2
-        n3 = h3 * w3
-        off1 = 0
-        off2 = n1
-        off3 = n1 + n2
+        feats = F.normalize(x.float(), dim=-1)[:, ids.clamp(min=0)]
+        sim = feats @ feats.transpose(-1, -2)
+        invalid = (ids < 0).unsqueeze(1) | torch.eye(block, dtype=torch.bool, device=device)
+        sim = sim.masked_fill(invalid, -torch.inf)
+        val, nbr = sim.topk(k, dim=-1)
 
-        # Project all scales to 64-d
-        proj1 = self.project_nodes(features[0])  # [B, N1, 64]
-        proj2 = self.project_nodes(features[1])  # [B, N2, 64]
-        proj3 = self.project_nodes(features[2])  # [B, N3, 64]
+        recv = ids.view(1, *ids.shape, 1).expand_as(nbr)
+        send = torch.gather(ids.expand(batch_size, -1, -1), 2, nbr.flatten(2)).view_as(nbr)
+        dx = send % w - recv % w
+        dy = send // w - recv // w
+        outside_window = (dx.abs() > self.r_local) | (dy.abs() > self.r_local)
+        keep = (recv >= 0) & torch.isfinite(val) & outside_window
 
-        batch_graphs = []
-        for b in range(batch_size):
-            nodes_b = torch.cat([proj1[b], proj2[b], proj3[b]], dim=0)  # [Total_nodes, 64]
+        base = torch.arange(batch_size, device=device).view(-1, 1, 1, 1) * n + offset
+        edges = torch.stack([(recv + base)[keep], (send + base)[keep]])
+        geom = edge_geometry(torch.stack([dx[keep], dy[keep]], dim=-1).float())
+        return edges, geom
 
-            # 1. Local window edges per scale
-            e_loc1, d_loc1 = self.build_local_edges(h1, w1, off1, device)
-            e_loc2, d_loc2 = self.build_local_edges(h2, w2, off2, device)
-            e_loc3, d_loc3 = self.build_local_edges(h3, w3, off3, device)
+    def _static(self, shapes: List[Tuple[int, int]], device: torch.device) -> Tuple:
+        key = (tuple(shapes), str(device))
+        if key not in self._static_cache:
+            self._static_cache[key] = self._build_static(shapes, device)
+        return self._static_cache[key]
 
-            # 2. Feature kNN edges per scale
-            e_knn1, d_knn1 = self.build_knn_edges(proj1[b], h1, w1, off1)
-            e_knn2, d_knn2 = self.build_knn_edges(proj2[b], h2, w2, off2)
-            e_knn3, d_knn3 = self.build_knn_edges(proj3[b], h3, w3, off3)
+    def _build_static(self, shapes: List[Tuple[int, int]], device: torch.device) -> Tuple:
+        offsets = [0]
+        for h, w in shapes[:-1]:
+            offsets.append(offsets[-1] + h * w)
+        centers = [self._centers(h, w, s, device) for (h, w), s in zip(shapes, self.strides)]
 
-            # 3. Cross-scale edges (F1 <-> F2 and F2 <-> F3)
-            e_cross12, d_cross12 = self.build_cross_scale_edges(h1, w1, off1, h2, w2, off2, device)
-            e_cross23, d_cross23 = self.build_cross_scale_edges(h2, w2, off2, h3, w3, off3, device)
+        edges, types, geoms = [], [], []
+        for (h, w), off in zip(shapes, offsets):
+            e, g = self._local(h, w, off, device)
+            edges.append(e)
+            types.append(torch.full((e.shape[1],), LOCAL, dtype=torch.long, device=device))
+            geoms.append(g)
 
-            # Edge type tags: 0=local, 1=knn, 2=cross_down, 3=cross_up
-            type_loc = torch.zeros(e_loc1.shape[1] + e_loc2.shape[1] + e_loc3.shape[1], dtype=torch.long, device=device)
-            type_knn = torch.ones(e_knn1.shape[1] + e_knn2.shape[1] + e_knn3.shape[1], dtype=torch.long, device=device)
-            type_cross = torch.full((e_cross12.shape[1] + e_cross23.shape[1],), 2, dtype=torch.long, device=device)
+        for lvl in range(len(shapes) - 1):
+            (h2, w2), s1, s2 = shapes[lvl + 1], self.strides[lvl], self.strides[lvl + 1]
+            child = torch.arange(shapes[lvl][0] * shapes[lvl][1], device=device)
+            c_xy = centers[lvl]
+            py = torch.div(c_xy[:, 1], s2, rounding_mode="floor").long().clamp(max=h2 - 1)
+            px = torch.div(c_xy[:, 0], s2, rounding_mode="floor").long().clamp(max=w2 - 1)
+            parent = py * w2 + px
+            delta = centers[lvl + 1][parent] - c_xy
+            child, parent = child + offsets[lvl], parent + offsets[lvl + 1]
 
-            all_edges = torch.cat([e_loc1, e_loc2, e_loc3, e_knn1, e_knn2, e_knn3, e_cross12, e_cross23], dim=1)
-            all_deltas = torch.cat([d_loc1, d_loc2, d_loc3, d_knn1, d_knn2, d_knn3, d_cross12, d_cross23], dim=0)
-            all_types = torch.cat([type_loc, type_knn, type_cross], dim=0)
+            edges += [torch.stack([child, parent]), torch.stack([parent, child])]
+            types += [
+                torch.full_like(child, TOP_DOWN),
+                torch.full_like(child, BOTTOM_UP),
+            ]
+            geoms += [edge_geometry(delta / s1), edge_geometry(-delta / s2)]
 
-            # Deduplication with local precedence
-            # Pack src, tgt into 64-bit keys
-            keys = (all_edges[0].long() << 32) | all_edges[1].long()
-            unique_keys, inv_idx = torch.unique(keys, return_inverse=True)
-            perm = torch.arange(keys.size(0), dtype=torch.long, device=device)
-            first_idx = torch.empty(unique_keys.size(0), dtype=torch.long, device=device)
-            first_idx.scatter_(0, inv_idx, perm)
+        static = (torch.cat(edges, dim=1), torch.cat(types), torch.cat(geoms))
+        return torch.cat(centers), offsets, static
 
-            dedup_edges = all_edges[:, first_idx]
-            dedup_deltas = all_deltas[first_idx]
-            dedup_types = all_types[first_idx]
+    def _local(self, h: int, w: int, offset: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        r = self.r_local
+        span = torch.arange(-r, r + 1, device=device)
+        dy, dx = torch.meshgrid(span, span, indexing="ij")
+        dy, dx = dy.reshape(-1), dx.reshape(-1)
+        nonzero = (dx != 0) | (dy != 0)
+        dy, dx = dy[nonzero], dx[nonzero]
 
-            kij, wij = self.compute_student_t_weights(dedup_edges, nodes_b)
+        node = torch.arange(h * w, device=device)
+        ny = (node // w).unsqueeze(1) + dy
+        nx = (node % w).unsqueeze(1) + dx
+        valid = (ny >= 0) & (ny < h) & (nx >= 0) & (nx < w)
+        recv = node.unsqueeze(1).expand_as(ny)[valid] + offset
+        send = (ny * w + nx)[valid] + offset
+        dxy = torch.stack([dx.expand_as(ny)[valid], dy.expand_as(ny)[valid]], dim=-1).float()
+        return torch.stack([recv, send]), edge_geometry(dxy)
 
-            batch_graphs.append({
-                "nodes": nodes_b,
-                "edge_index": dedup_edges,
-                "edge_types": dedup_types,
-                "edge_deltas": dedup_deltas,
-                "kij": kij,
-                "wij": wij,
-                "scale_splits": [n1, n2, n3],
-            })
-
-        return batch_graphs
+    @staticmethod
+    def _centers(h: int, w: int, stride: int, device: torch.device) -> torch.Tensor:
+        y, x = torch.meshgrid(torch.arange(h, device=device), torch.arange(w, device=device), indexing="ij")
+        return (torch.stack([x.reshape(-1), y.reshape(-1)], dim=-1).float() + 0.5) * stride

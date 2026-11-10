@@ -7,7 +7,7 @@ from src.utils.checkpoint import (
     CheckpointIncompatibilityError,
 )
 from src.utils.progress import TrainingProgressDisplay
-from src.utils.metrics import compute_dece, compute_ap, compute_iou_matrix
+from src.utils.metrics import compute_dece, compute_map, compute_iou_matrix, uncertainty_auroc
 from src.utils.bootstrap import paired_image_bootstrap_test, apply_holm_bonferroni
 
 __all__ = [
@@ -19,7 +19,8 @@ __all__ = [
     "CheckpointIncompatibilityError",
     "TrainingProgressDisplay",
     "compute_dece",
-    "compute_ap",
+    "compute_map",
+    "uncertainty_auroc",
     "compute_iou_matrix",
     "paired_image_bootstrap_test",
     "apply_holm_bonferroni",

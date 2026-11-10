@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UCR-MFG: Introduction and Methodology</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:true,trust:true})"></script>
+<style>
+  @page { size: A4; margin: 20mm 19mm 20mm 19mm; }
+  :root { --ink: #1a1a1a; --muted: #555; --rule: #c9c9c9; --accent: #3b2f7a; --box: #f6f5fa; }
+  html { background: #fff; }
+  body { font-family: "Times New Roman", "Nimbus Roman", Times, serif; color: var(--ink); font-size: 10.6pt;
+         line-height: 1.42; margin: 0; text-align: justify; hyphens: auto; }
+  h1 { font-size: 17pt; text-align: center; margin: 0 0 4pt; line-height: 1.2; }
+  .subtitle { text-align: center; color: var(--muted); font-size: 10.5pt; margin-bottom: 14pt; }
+  .abstract { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); padding: 8pt 0; margin-bottom: 14pt; font-size: 10pt; }
+  .abstract b { font-variant: small-caps; }
+  h2 { font-size: 13pt; margin: 16pt 0 6pt; color: var(--accent); break-after: avoid; }
+  h3 { font-size: 11.2pt; margin: 12pt 0 4pt; break-after: avoid; }
+  p { margin: 0 0 6pt; }
+  ul { margin: 2pt 0 7pt 0; padding-left: 16pt; }
+  li { margin-bottom: 3pt; }
+  .katex-display { margin: 6pt 0; overflow: visible; }
+  .katex { font-size: 1.04em; }
+  .algo { border: 1px solid var(--accent); background: var(--box); padding: 6pt 9pt; margin: 9pt 0; break-inside: avoid;
+          font-size: 9.8pt; text-align: left; }
+  .algo .title { font-weight: bold; border-bottom: 1px solid var(--accent); padding-bottom: 3pt; margin-bottom: 4pt; }
+  .algo ol { margin: 0; padding-left: 18pt; }
+  .algo li { margin-bottom: 1.5pt; }
+  .kw { font-weight: bold; }
+  table { border-collapse: collapse; width: 100%; font-size: 9.6pt; margin: 6pt 0 9pt; break-inside: avoid; }
+  th, td { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); padding: 3pt 5pt; text-align: left; vertical-align: top; }
+  th { background: var(--box); }
+  .caption { font-size: 9.4pt; color: var(--muted); text-align: center; margin-bottom: 9pt; }
+  .note { font-size: 9.6pt; color: var(--muted); }
+  .refs { font-size: 9.4pt; text-align: left; }
+  .refs li { margin-bottom: 2pt; }
+  .pipeline { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 8.6pt; display: flex; flex-wrap: wrap;
+              justify-content: center; align-items: center; gap: 4pt; margin: 8pt 0 3pt; break-inside: avoid; }
+  .pipeline > span { border: 1px solid #999; border-radius: 3pt; padding: 3pt 6pt; background: #f3f1ec; }
+  .pipeline > span.c { border-color: var(--accent); background: #ebe8f7; color: var(--accent); }
+  .keep { break-inside: avoid; }
+  .pipeline > i { font-style: normal; color: #777; }
+
+  figure { margin: 10pt 0 12pt; text-align: center; }
+  figure svg.fig { width: 100%; height: auto; max-height: 245mm; }
+  figcaption { font-size: 9.4pt; color: var(--muted); margin-top: 4pt; text-align: center; }
+  .plain { border-left: 3px solid #c07a1e; background: #fbf6ee; padding: 6pt 10pt; margin: 8pt 0 10pt; font-size: 10.2pt; break-inside: avoid; }
+  .plain-title { font-weight: bold; color: #8a5410; margin-bottom: 3pt; font-family: "Helvetica Neue", Arial, sans-serif; font-size: 9.6pt; letter-spacing: 0.02em; }
+  .plain p:last-child { margin-bottom: 0; }
+  .steps { counter-reset: step; list-style: none; padding-left: 0; }
+  .steps > li { counter-increment: step; position: relative; padding-left: 24pt; margin-bottom: 5pt; }
+  .steps > li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 16pt; height: 16pt; border-radius: 50%;
+      background: var(--accent); color: #fff; font: bold 8.5pt "Helvetica Neue", Arial, sans-serif; text-align: center; line-height: 16pt; }
+  pre { background: #f4f4f4; border: 1px solid #ddd; padding: 5pt 8pt; font-size: 8.8pt; line-height: 1.35; white-space: pre-wrap; text-align: left;
+      break-inside: avoid; margin: 4pt 0 8pt; }
+  code { font-family: Menlo, Consolas, monospace; font-size: 0.9em; }
+  h2.newpage { break-before: page; }
+  figure.arch svg.fig { max-height: 188mm; }
+  table.flow { break-inside: auto; }
+  table.flow tr { break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<h1>UCR-MFG: Uncertainty-Conditioned Relational Routing<br>for Multi-Scale Fuzzy Graph Object Detection</h1>
+<div class="subtitle">Technical report: Introduction, Methodology and Working Guide</div>
+
+<div class="abstract">
+<b>Summary.</b> UCR-MFG extends the multi-scale fuzzy graph detector MFG-YOLO [6] with four coordinated contributions:
+(C1) dual predictive uncertainty that separates aleatoric from epistemic uncertainty; (C2) a router that uses this
+uncertainty, together with node features, fuzzy affinities and geometry, to keep only useful graph relations;
+(C3) benefit-aware multi-scale message passing that computes and weighs only routed messages; and (C4) an
+uncertainty-aware gate that fuses visual and graph-enhanced features by their reliability. Detections are returned with
+class, box, box standard deviation, aleatoric and epistemic uncertainty. This report states the problem, explains in plain language how the system works,
+gives the full formulation, losses, training curriculum and algorithms as implemented, and ends with a practical guide to running the project.
+</div>
+
+<h2>1&nbsp;&nbsp;Introduction</h2>
+
+<p>Object detection locates and classifies the objects in an image, and underpins autonomous driving, surveillance,
+drone-based monitoring and industrial inspection. Deep detectors, YOLO-style architectures in particular, have pushed
+accuracy and speed far, and recent work adds multi-scale features, attention, graph neural networks and fuzzy
+representations to handle visually complex scenes. Detection in cluttered, changing environments nevertheless remains
+unreliable: models fail when objects are partly hidden, have blurred boundaries, appear at very different scales, or
+are captured under shifting lighting, weather, camera or location. Aerial and UAV imagery combines all of these with
+dense clusters of very small objects.</p>
+
+<p>Uncertainty is a second weakness. Most detectors emit a single confidence score and do not separate uncertainty
+caused by missing information in the input (<em>aleatoric</em>) from uncertainty caused by the model's limited
+knowledge (<em>epistemic</em>) [11]. Graph-based detectors add their own problems: they introduce unnecessary connections
+that raise cost, and every retained edge passes a message whether or not it helps.</p>
+
+<p>Existing fuzzy graph detectors fall short in four ways. (i) Feature-level relational uncertainty is not paired with
+separate aleatoric and epistemic estimates. (ii) Fuzzy graph construction measures how strongly two regions are
+related, but not whether passing information along that relation will help detection. (iii) Message passing does not
+weigh what each message is worth against what it costs. (iv) Fusion does not account for the relative reliability of
+the visual and graph-enhanced representations. When a region is occluded, blurred or ambiguous its own features may
+not support a reliable decision; the model should determine which relations actually help that uncertain region,
+adapt information transfer across scales, and trust each feature source according to its reliability.</p>
+
+<p>Related work supplies each ingredient separately. Deformable DETR [2] samples a sparse set of multi-scale points,
+but from appearance alone, with no notion of the reliability of the sampled evidence. RT-DETR [5] decouples intra-scale
+interaction from cross-scale fusion for real-time detection, but fuses scales with fixed learned weights. GraphFPN [3]
+passes context over a feature-pyramid graph with deterministic similarity edges. Deterministic uncertainty [4] reads
+uncertainty from feature space in one pass, without splitting it. MFG-YOLO [6] models region affinity with a
+heavy-tailed Student-<i>t</i> kernel so ambiguous pairs keep a small non-zero link, but its graph is fixed once built
+and its uncertainty is not decomposed. UCR-MFG closes this gap with four contributions:</p>
+<ul>
+  <li><b>C1 Dual predictive uncertainty modeling:</b> aleatoric and epistemic uncertainty per location and per detection.</li>
+  <li><b>C2 Uncertainty-conditioned relational routing:</b> candidate relations are scored from node features, fuzzy affinity, both uncertainties and geometry; only the most useful are kept, with larger budgets for more uncertain locations.</li>
+  <li><b>C3 Benefit-aware multi-scale message passing:</b> messages flow only along routed edges within and across scales, each scaled by a learned benefit gate.</li>
+  <li><b>C4 Uncertainty-aware feature fusion and probabilistic detection:</b> a gate conditioned on features and uncertainty mixes visual and graph features; the head outputs class, box and uncertainty.</li>
+</ul>
+
+
+<h2>2&nbsp;&nbsp;How UCR-MFG works: the big picture</h2>
+
+<figure class='keep arch'><svg class='fig' viewBox='0 0 640 734' xmlns='http://www.w3.org/2000/svg' font-family='Helvetica Neue, Arial, sans-serif' role='img'><defs><marker id='ag' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#8a8578'/></marker><marker id='ap' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#3b2f7a'/></marker><marker id='ar' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#b4432f'/></marker><marker id='agr' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#2f7a4a'/></marker></defs><rect x='240' y='8' width='160' height='40' rx='6' fill='#f1efe9' stroke='#8a8578' stroke-width='1.2'/><text x='320.0' y='25.0' text-anchor='middle' font-size='12' font-weight='600' fill='#1a1a1a'>Input image</text><text x='320.0' y='40.0' text-anchor='middle' font-size='9.5' fill='#555555'>1024 × 1024 RGB</text><path d='M320,48 V74' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><rect x='190' y='76' width='260' height='44' rx='6' fill='#f1efe9' stroke='#8a8578' stroke-width='1.2'/><text x='320.0' y='95.0' text-anchor='middle' font-size='12' font-weight='600' fill='#1a1a1a'>Backbone + feature pyramid</text><text x='320.0' y='110.0' text-anchor='middle' font-size='9.5' fill='#555555'>ResNet-50 + FPN, 256 channels</text><path d='M320,120 V132 H200 V146' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><rect x='150' y='148' width='100' height='40' rx='6' fill='#f1efe9' stroke='#8a8578' stroke-width='1.2'/><text x='200.0' y='165.0' text-anchor='middle' font-size='11' font-weight='600' fill='#1a1a1a'>F1 · 128×128</text><text x='200.0' y='180.0' text-anchor='middle' font-size='9.5' fill='#555555'>fine, stride 8</text><path d='M320,120 V132 H320 V146' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><rect x='270' y='148' width='100' height='40' rx='6' fill='#f1efe9' stroke='#8a8578' stroke-width='1.2'/><text x='320.0' y='165.0' text-anchor='middle' font-size='11' font-weight='600' fill='#1a1a1a'>F2 · 64×64</text><text x='320.0' y='180.0' text-anchor='middle' font-size='9.5' fill='#555555'>medium, stride 16</text><path d='M320,120 V132 H440 V146' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><rect x='390' y='148' width='100' height='40' rx='6' fill='#f1efe9' stroke='#8a8578' stroke-width='1.2'/><text x='440.0' y='165.0' text-anchor='middle' font-size='11' font-weight='600' fill='#1a1a1a'>F3 · 32×32</text><text x='440.0' y='180.0' text-anchor='middle' font-size='9.5' fill='#555555'>coarse, stride 32</text><path d='M320,188 V210 H155 V234' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><path d='M320,210 H485 V234' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><rect x='40' y='236' width='230' height='58' rx='6' fill='#ece9f8' stroke='#3b2f7a' stroke-width='1.2'/><text x='155.0' y='262.0' text-anchor='middle' font-size='12' font-weight='600' fill='#3b2f7a'>C1 · Dual uncertainty</text><text x='155.0' y='277.0' text-anchor='middle' font-size='9.5' fill='#555555'>Ua: unclear image · Ue: unfamiliar content</text><rect x='370' y='236' width='230' height='58' rx='6' fill='#f1efe9' stroke='#8a8578' stroke-width='1.2'/><text x='485.0' y='262.0' text-anchor='middle' font-size='12' font-weight='600' fill='#1a1a1a'>Candidate fuzzy graph</text><text x='485.0' y='277.0' text-anchor='middle' font-size='9.5' fill='#555555'>local + look-alike + cross-scale links</text><text x='485' y='306' text-anchor='middle' font-size='9' font-weight='400' fill='#555555'>Student-t link strength k_ij</text><path d='M155,294 V312 H260 V334' fill='none' stroke='#3b2f7a' stroke-width='1.3' marker-end='url(#ap)'/><path d='M485,312 V318 H380 V334' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><rect x='170' y='336' width='300' height='52' rx='6' fill='#ece9f8' stroke='#3b2f7a' stroke-width='1.2'/><text x='320.0' y='359.0' text-anchor='middle' font-size='12' font-weight='600' fill='#3b2f7a'>C2 · Uncertainty-conditioned router</text><text x='320.0' y='374.0' text-anchor='middle' font-size='9.5' fill='#555555'>scores every link, keeps the best few per location</text><path d='M320,388 V414' fill='none' stroke='#3b2f7a' stroke-width='1.3' marker-end='url(#ap)'/><rect x='170' y='416' width='300' height='52' rx='6' fill='#ece9f8' stroke='#3b2f7a' stroke-width='1.2'/><text x='320.0' y='439.0' text-anchor='middle' font-size='12' font-weight='600' fill='#3b2f7a'>C3 · Benefit-aware message passing</text><text x='320.0' y='454.0' text-anchor='middle' font-size='9.5' fill='#555555'>gated messages along kept links  →  H</text><path d='M320,468 V494' fill='none' stroke='#3b2f7a' stroke-width='1.3' marker-end='url(#ap)'/><rect x='170' y='496' width='300' height='52' rx='6' fill='#ece9f8' stroke='#3b2f7a' stroke-width='1.2'/><text x='320.0' y='519.0' text-anchor='middle' font-size='12' font-weight='600' fill='#3b2f7a'>C4 · Uncertainty-aware fusion</text><text x='320.0' y='534.0' text-anchor='middle' font-size='9.5' fill='#555555'>Z = λ ⊙ F + (1 − λ) ⊙ H</text><path d='M320,548 V574' fill='none' stroke='#3b2f7a' stroke-width='1.3' marker-end='url(#ap)'/><rect x='170' y='576' width='300' height='52' rx='6' fill='#ece9f8' stroke='#3b2f7a' stroke-width='1.2'/><text x='320.0' y='599.0' text-anchor='middle' font-size='12' font-weight='600' fill='#3b2f7a'>Probabilistic detection head</text><text x='320.0' y='614.0' text-anchor='middle' font-size='9.5' fill='#555555'>class · box · centerness · box variance</text><path d='M320,628 V652' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><rect x='205' y='654' width='230' height='40' rx='6' fill='#f1efe9' stroke='#8a8578' stroke-width='1.2'/><text x='320.0' y='671.0' text-anchor='middle' font-size='11.5' font-weight='600' fill='#1a1a1a'>Detections + uncertainty</text><text x='320.0' y='686.0' text-anchor='middle' font-size='9.5' fill='#555555'>box, class, score, box std, Ua, Ue</text><path d='M490,168 H622 V522 H472' fill='none' stroke='#8a8578' stroke-width='1.3' stroke-dasharray='5 4' marker-end='url(#ag)'/><text x='630' y='345' text-anchor='middle' font-size='9.5' font-weight='400' fill='#555555' transform='rotate(90 630 345)'>visual features F (skip)</text><path d='M40,265 H18 V530 H168' fill='none' stroke='#3b2f7a' stroke-width='1.3' stroke-dasharray='5 4' marker-end='url(#ap)'/><text x='10' y='400' text-anchor='middle' font-size='9.5' font-weight='400' fill='#3b2f7a' transform='rotate(-90 10 400)'>Ua, Ue (skip)</text><path d='M170,602 H96 V370 H168' fill='none' stroke='#b4432f' stroke-width='1.3' stroke-dasharray='5 4' marker-end='url(#ar)'/><text x='86' y='462' text-anchor='middle' font-size='9.5' font-weight='400' fill='#b4432f' transform='rotate(-90 86 462)'>benefit signal (training)</text><rect x='120' y='716' width='14' height='10' rx='2' fill='#f1efe9' stroke='#8a8578'/><text x='140' y='725' text-anchor='start' font-size='9.5' font-weight='400' fill='#555555'>retained from MFG-YOLO</text><rect x='280' y='716' width='14' height='10' rx='2' fill='#ece9f8' stroke='#3b2f7a'/><text x='300' y='725' text-anchor='start' font-size='9.5' font-weight='400' fill='#555555'>new in UCR-MFG</text><path d='M410,721 H440' fill='none' stroke='#8a8578' stroke-width='1.3' stroke-dasharray='5 4'/><text x='446' y='725' text-anchor='start' font-size='9.5' font-weight='400' fill='#555555'>skip / training-only path</text></svg><figcaption>Figure 1. UCR-MFG architecture. The image flows from top to bottom. Gray blocks come from MFG-YOLO, purple blocks are the four contributions. Dashed lines carry the visual features and the uncertainty maps straight to the fusion gate, and (in red) the training-time benefit signal that teaches the router which links help.</figcaption></figure>
+
+<p>Figure 1 shows the whole system. Before the equations, here is what it does in everyday terms. Think of a drone photo of a busy street.
+Some objects are easy: a bus in full view. Others are hard: a pedestrian half hidden behind a tree, a blurry motorbike,
+a car that is only twelve pixels wide. A normal detector looks at each spot of the image mostly on its own and gives one
+confidence number. UCR-MFG does three extra things. It <em>notices</em> where it is unsure and why. It <em>asks the
+right neighbours</em> for help, instead of everyone. And it <em>decides how much to believe</em> that help before it
+makes the final call.</p>
+
+
+
+<h3>2.1&nbsp;&nbsp;Following one image through the model</h3>
+<ol class="steps">
+  <li><b>Preparing the image.</b> The photo is resized and padded to 1024 × 1024 pixels without stretching it. Regions that
+  VisDrone marks as "ignore" (crowds too dense to label, for example) are remembered, so the model is neither rewarded nor
+  punished there.</li>
+  <li><b>Seeing at three zoom levels.</b> The backbone turns the image into three feature maps. In the finest one, F1, each cell
+  covers 8 × 8 pixels, which is what tiny pedestrians need. In the coarsest one, F3, each cell covers 32 × 32 pixels, which suits
+  buses and trucks. Every cell holds a 256-number description of what it sees.</li>
+  <li><b>Asking "how sure am I, and why?" (C1).</b> A small head looks at every cell and runs ten times with random parts
+  switched off (dropout). If all ten runs agree but each one is hesitant, the image itself is unclear there: that is
+  <em>aleatoric</em> uncertainty (blur, occlusion, shadow). If the ten runs disagree with each other, the model simply has not
+  learned this kind of thing: that is <em>epistemic</em> uncertainty. Each cell gets both scores between 0 and 1.</li>
+  <li><b>Drawing possible connections.</b> Every cell becomes a node in a graph. It is linked to its close neighbours, to cells
+  elsewhere that look similar, and to the matching cells one zoom level up and down. Each link gets a fuzzy strength from a
+  Student-<i>t</i> kernel: similar cells are strongly linked, and ambiguous pairs keep a weak link instead of being cut off.
+  That is over a million possible links per batch, far too many to use them all.</li>
+  <li><b>Choosing whom to ask (C2).</b> The router gives every link a usefulness score, based on what both cells look like,
+  how strong their link is, how unsure each one is, and where they sit relative to each other. Each cell keeps only its best few
+  links (about 31% of them survive). A cell that is unsure is allowed to keep a couple more, because it needs more help.</li>
+  <li><b>Listening, but carefully (C3).</b> Along the kept links, neighbours send short summaries of what they see. Every
+  message passes through a gate: a clear view of the same car passes almost fully, while a message from a shadow is turned
+  down. Each cell then updates its own description with what it heard. The result is a second set of maps, H.</li>
+  <li><b>Deciding how much to trust the neighbours (C4).</b> Now every cell has two descriptions: F (what it sees itself) and
+  H (what its neighbours told it). A fusion gate mixes them channel by channel. For a clear object the gate stays near F; for an
+  occluded or blurry one it leans more on H.</li>
+  <li><b>Making the call, with error bars.</b> The detection head predicts the class, the box, a centerness score and how unsure
+  it is about each side of the box. After removing duplicate boxes (NMS), every detection is reported with its score, box,
+  box standard deviation in pixels, and its aleatoric and epistemic uncertainty.</li>
+  <li><b>Learning which links help (training only).</b> Every second training step, the model checks every possible link and
+  measures whether strengthening it would have lowered the detection error. The router is taught to pick the links that help
+  the most. This is what makes the router benefit-aware rather than a plain similarity filter.</li>
+</ol>
+
+<h3>2.2&nbsp;&nbsp;Where each part lives in the code</h3>
+<table class="flow">
+<tr><th>Part</th><th>File</th><th>What it does</th></tr>
+<tr><td>Backbone + pyramid</td><td><code>src/models/backbone.py</code></td><td>ResNet-50 + FPN, produces F1, F2, F3</td></tr>
+<tr><td>C1 Dual uncertainty</td><td><code>src/models/uncertainty_head.py</code></td><td>Aleatoric and epistemic maps from 10 dropout passes</td></tr>
+<tr><td>Fuzzy graph</td><td><code>src/models/graph_builder.py</code></td><td>Candidate links, geometry, Student-<i>t</i> strengths</td></tr>
+<tr><td>C2 Router</td><td><code>src/models/router.py</code></td><td>Link scores, uncertainty-based budgets, top-K selection</td></tr>
+<tr><td>C3 Message passing</td><td><code>src/models/message_passing.py</code></td><td>Attention, benefit gate, GRU update, produces H</td></tr>
+<tr><td>C4 Fusion</td><td><code>src/models/fusion.py</code></td><td>Learned mix of F and H</td></tr>
+<tr><td>Probabilistic head</td><td><code>src/models/detection_head.py</code>, <code>postprocess.py</code></td><td>Class, box, box variance; NMS and per-detection uncertainty</td></tr>
+<tr><td>Whole model</td><td><code>src/models/ucr_mfg.py</code></td><td>Connects the parts and switches them on stage by stage</td></tr>
+<tr><td>Losses</td><td><code>src/losses/*.py</code></td><td>Detection, uncertainty, graph, router, consistency</td></tr>
+<tr><td>Training and evaluation</td><td><code>scripts/train.py</code>, <code>scripts/eval.py</code>, <code>src/engine.py</code></td><td>Training loop, benefit pass, validation, metrics</td></tr>
+</table>
+
+<h2>3&nbsp;&nbsp;Methodology</h2>
+
+<h3>3.1&nbsp;&nbsp;Overview and notation</h3>
+<div class='plain'><div class='plain-title'>In plain words</div><p>This section only fixes the symbols used below. \(F_l\) is the feature map at zoom level \(l\); each of its cells is a
+        graph node \(i\). An arrow \((i \leftarrow j)\) means "node \(i\) listens to node \(j\)". \(U^a\) and \(U^e\) are the
+        two uncertainty maps, \(H\) is the graph-enhanced map and \(Z\) is the fused map that the detector finally uses.</p></div>
+<p>Figure 1 in Section 2 shows the full data flow.</p>
+<p>An image \(I \in \mathbb{R}^{3\times H\times W}\) is encoded into a pyramid \(F_l \in \mathbb{R}^{C\times H_l\times W_l}\),
+\(l \in \{1,2,3\}\), with strides \(s_l \in \{8,16,32\}\) and \(C = 256\). The current implementation uses a ResNet-50
+feature pyramid; the method only requires three levels of width \(C\). Each pyramid location is a graph node
+\(i\) with pixel center \(\mathbf{p}_i = s_{l(i)}\,(x_i + \tfrac12,\; y_i + \tfrac12)\); the graph has
+\(N = \sum_l H_l W_l\) nodes per image, and \(f_i \in \mathbb{R}^C\) is the feature of node \(i\). Edges are written
+\((i \leftarrow j)\): node \(i\) receives from node \(j\). \(K\) is the number of classes, \(\sigma\) the logistic
+function, \(\operatorname{sg}(\cdot)\) the stop-gradient operator and \(\mathbb{1}[\cdot]\) the indicator.</p>
+
+<h3>3.2&nbsp;&nbsp;C1: Dual predictive uncertainty</h3>
+<div class='plain'><div class='plain-title'>In plain words: C1</div><p><b>Goal.</b> Tell, for every spot in the image, how unsure the model is <em>and why</em>.</p>
+        <p><b>How.</b> A light head predicts a class guess and a box spread for every cell. To measure doubt, it is run ten times with
+        random 20% of its inputs dropped. Imagine asking ten slightly different copies of the same expert. If they all say "maybe a car,
+        maybe a van" in the same way, the picture itself is ambiguous (aleatoric). If one says car, another bus, another bicycle, the
+        expert is out of its depth (epistemic). A wide predicted box spread at the centre of an object also adds to aleatoric
+        uncertainty, because it means the edges of the object are hard to see.</p>
+        <p><b>Why it matters.</b> The two scores are not just reported. They steer the next three parts: who to ask (C2), how much
+        to listen (C3) and how much to trust the answer (C4).</p></div><figure class='keep'><svg class='fig' viewBox='0 0 700 186' xmlns='http://www.w3.org/2000/svg' font-family='Helvetica Neue, Arial, sans-serif' role='img'><defs><marker id='ag' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#8a8578'/></marker><marker id='ap' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#3b2f7a'/></marker><marker id='ar' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#b4432f'/></marker><marker id='agr' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#2f7a4a'/></marker></defs><text x='330' y='14' text-anchor='middle' font-size='9.5' font-weight='400' fill='#555555'>five of the ten dropout passes (bars = class probabilities)</text><text x='10' y='48' text-anchor='start' font-size='10.5' font-weight='600' fill='#1a1a1a'>Clear car</text><rect x='178' y='26' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='179.0' y='32.5' width='11.5' height='25.5' fill='#2f7a4a'/><rect x='192.5' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='206.0' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='219.5' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='240' y='26' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='241.0' y='32.5' width='11.5' height='25.5' fill='#2f7a4a'/><rect x='254.5' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='268.0' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='281.5' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='302' y='26' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='303.0' y='32.5' width='11.5' height='25.5' fill='#2f7a4a'/><rect x='316.5' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='330.0' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='343.5' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='364' y='26' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='365.0' y='32.5' width='11.5' height='25.5' fill='#2f7a4a'/><rect x='378.5' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='392.0' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='405.5' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='426' y='26' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='427.0' y='32.5' width='11.5' height='25.5' fill='#2f7a4a'/><rect x='440.5' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='454.0' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><rect x='467.5' y='56.5' width='11.5' height='1.5' fill='#2f7a4a'/><path d='M494,43 H516' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><text x='522' y='47' text-anchor='start' font-size='10' font-weight='600' fill='#2f7a4a'>both low</text><text x='10' y='100' text-anchor='start' font-size='10.5' font-weight='600' fill='#1a1a1a'>Blurred, half-hidden car</text><rect x='178' y='78' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='179.0' y='99.5' width='11.5' height='10.5' fill='#c07a1e'/><rect x='192.5' y='101.0' width='11.5' height='9.0' fill='#c07a1e'/><rect x='206.0' y='104.0' width='11.5' height='6.0' fill='#c07a1e'/><rect x='219.5' y='105.5' width='11.5' height='4.5' fill='#c07a1e'/><rect x='240' y='78' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='241.0' y='100.1' width='11.5' height='9.9' fill='#c07a1e'/><rect x='254.5' y='100.4' width='11.5' height='9.6' fill='#c07a1e'/><rect x='268.0' y='104.0' width='11.5' height='6.0' fill='#c07a1e'/><rect x='281.5' y='105.5' width='11.5' height='4.5' fill='#c07a1e'/><rect x='302' y='78' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='303.0' y='99.2' width='11.5' height='10.799999999999999' fill='#c07a1e'/><rect x='316.5' y='101.3' width='11.5' height='8.7' fill='#c07a1e'/><rect x='330.0' y='104.0' width='11.5' height='6.0' fill='#c07a1e'/><rect x='343.5' y='105.5' width='11.5' height='4.5' fill='#c07a1e'/><rect x='364' y='78' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='365.0' y='99.8' width='11.5' height='10.200000000000001' fill='#c07a1e'/><rect x='378.5' y='100.7' width='11.5' height='9.3' fill='#c07a1e'/><rect x='392.0' y='104.0' width='11.5' height='6.0' fill='#c07a1e'/><rect x='405.5' y='105.5' width='11.5' height='4.5' fill='#c07a1e'/><rect x='426' y='78' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='427.0' y='99.5' width='11.5' height='10.5' fill='#c07a1e'/><rect x='440.5' y='101.0' width='11.5' height='9.0' fill='#c07a1e'/><rect x='454.0' y='103.7' width='11.5' height='6.3' fill='#c07a1e'/><rect x='467.5' y='105.8' width='11.5' height='4.2' fill='#c07a1e'/><path d='M494,95 H516' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><text x='522' y='99' text-anchor='start' font-size='10' font-weight='600' fill='#c07a1e'>aleatoric HIGH · epistemic low</text><text x='10' y='152' text-anchor='start' font-size='10.5' font-weight='600' fill='#1a1a1a'>Unusual vehicle (never seen)</text><rect x='178' y='130' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='179.0' y='136.5' width='11.5' height='25.5' fill='#b4432f'/><rect x='192.5' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='206.0' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='219.5' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='240' y='130' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='241.0' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='254.5' y='136.5' width='11.5' height='25.5' fill='#b4432f'/><rect x='268.0' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='281.5' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='302' y='130' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='303.0' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='316.5' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='330.0' y='136.5' width='11.5' height='25.5' fill='#b4432f'/><rect x='343.5' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='364' y='130' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='365.0' y='136.5' width='11.5' height='25.5' fill='#b4432f'/><rect x='378.5' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='392.0' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='405.5' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='426' y='130' width='54' height='34' fill='#fff' stroke='#d0d0d0'/><rect x='427.0' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='440.5' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='454.0' y='160.5' width='11.5' height='1.5' fill='#b4432f'/><rect x='467.5' y='136.5' width='11.5' height='25.5' fill='#b4432f'/><path d='M494,147 H516' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><text x='522' y='151' text-anchor='start' font-size='10' font-weight='600' fill='#b4432f'>aleatoric low · epistemic HIGH</text></svg><figcaption>Figure 2. How ten dropout passes separate the two kinds of uncertainty. Agreeing but hesitant passes mean the image is unclear (aleatoric); disagreeing passes mean the model lacks knowledge (epistemic).</figcaption></figure>
+<p>A shared tower \(\phi\) (two \(3\times3\) convolutions with GroupNorm and SiLU) feeds three \(1\times1\) heads per location:
+box log-variances \(\mathbf{u}_i \in \mathbb{R}^4\), class logits \(\mathbf{z}_i \in \mathbb{R}^K\) and a pre-graph
+centerness \(c_i^{\text{pre}} = \sigma(\mathbf{w}_c^\top \phi(F)_i)\).</p>
+
+<p><b>Monte Carlo decomposition.</b> With \(T\) stochastic passes under inverted dropout of rate \(p\) [10],</p>
+$$\mathbf{z}_i^{(t)} = W_z\,\phi\!\left(\frac{D^{(t)} \odot F}{1-p}\right)_i,\quad D^{(t)} \sim \operatorname{Bernoulli}(1-p),\quad
+\mathbf{p}_i^{(t)} = \operatorname{softmax}(\mathbf{z}_i^{(t)}),\quad \bar{\mathbf{p}}_i = \frac1T\sum_{t=1}^{T}\mathbf{p}_i^{(t)}. \tag{1}$$
+<p>With entropy \(\mathcal{H}(\mathbf{p}) = -\sum_k p_k \log p_k\), the predictive entropy splits into an expected
+(aleatoric) term and the mutual information between prediction and weights (epistemic):</p>
+$$\underbrace{\mathcal{H}(\bar{\mathbf{p}}_i)}_{\text{total}} =
+\underbrace{\frac1T\sum_{t}\mathcal{H}(\mathbf{p}_i^{(t)})}_{\text{aleatoric } A_i}
++ \underbrace{\Big[\mathcal{H}(\bar{\mathbf{p}}_i) - \frac1T\sum_{t}\mathcal{H}(\mathbf{p}_i^{(t)})\Big]}_{\text{epistemic } \mathcal{I}_i}. \tag{2}$$
+<p>Localisation ambiguity enters through the predicted box variance, weighted by centerness so that off-center locations
+contribute little:</p>
+$$v_i = \frac14\sum_{r=1}^{4} e^{u_{i,r}}, \qquad B_i = c_i^{\text{pre}}\,\frac{v_i}{\sigma_0^2 + v_i}. \tag{3}$$
+$$U^a_i = \operatorname{clip}_{[0,1]}\!\Big(\tfrac12\,\frac{A_i}{\log K} + \tfrac12\,B_i\Big), \qquad
+U^e_i = \operatorname{clip}_{[0,1]}\!\Big(\frac{\max(\mathcal{I}_i,0)}{\log K}\Big). \tag{4}$$
+<p>We use \(T = 10\), \(p = 0.2\), \(\sigma_0^2 = 1\). The dropout masks of a batch are drawn from a generator seeded by
+(seed, epoch, batch index), so uncertainty maps are reproducible. When epistemic estimation is disabled (curriculum
+stage 1, Section 3.8) \(A_i = \mathcal{H}(\operatorname{softmax}\mathbf{z}_i)\) and \(U^e_i = 0\). Both maps are computed
+without gradient and used as conditioning signals by C2–C4.</p>
+
+<p><b>Training.</b> On the positive set \(\mathcal{P}\) (Section 3.7) with targets \(t_{i,r}\) and the detector's distances \(d_{i,r}\),
+the head is trained with a log-normal box likelihood and a class likelihood:</p>
+$$\mathcal{L}_u = \frac{1}{|\mathcal{P}|}\sum_{i\in\mathcal{P}} \Bigg[\sum_{r=1}^{4}\Big(\tfrac12 e^{-u_{i,r}}\big(\log t_{i,r} - \log \operatorname{sg}(d_{i,r})\big)^2 + \tfrac12 u_{i,r}\Big) - \log \operatorname{softmax}(\mathbf{z}_i)_{y_i}\Bigg]. \tag{5}$$
+<p>The squared error is measured in log-distance space: it is scale-free across pyramid levels and stays bounded for
+an untrained detector, which a linear-space Gaussian likelihood does not.</p>
+
+<h3>3.3&nbsp;&nbsp;Candidate multi-scale fuzzy graph</h3>
+<div class='plain'><div class='plain-title'>In plain words: the fuzzy graph</div><p><b>Goal.</b> List every relationship that <em>might</em> be useful, before deciding which ones are.</p>
+        <p><b>How.</b> Each cell is linked to three kinds of partners: its immediate surroundings (a 5 × 5 window), up to eight
+        look-alike cells in the same 32 × 32 neighbourhood of the map, and its "parent" and "children" at the zoom levels above and below.
+        The cross-scale links let a tiny pedestrian borrow context from the coarser map, and let a large bus borrow detail from the finer one.
+        Every link records direction and distance, and a fuzzy strength: identical-looking cells get a strength near 1, and very
+        different ones a small but non-zero value, so nothing is thrown away too early.</p></div>
+<p>Node embeddings are \(\mathbf{h}_i = \operatorname{LN}(W_p f_i) \in \mathbb{R}^{d}\) with \(d = 64\). Three candidate
+edge families are built per image:</p>
+<ul>
+  <li><b>Local</b>, same level: \(\mathcal{E}_{\text{loc}} = \{(i\leftarrow j): l(i)=l(j),\ 0 < \|(x_j - x_i,\, y_j - y_i)\|_\infty \le r\}\), \(r = 2\).</li>
+  <li><b>Feature kNN</b>, same level: the \(k_f = 8\) most cosine-similar nodes inside non-overlapping \(B\times B\) spatial blocks (\(B = 32\)), keeping only neighbours outside the local window, so the families are disjoint.</li>
+  <li><b>Cross-scale</b>: each node \(i\) at level \(l<3\) has parent \(\pi(i) = \big(\lfloor \mathbf{p}_{i,x}/s_{l+1}\rfloor,\lfloor \mathbf{p}_{i,y}/s_{l+1}\rfloor\big)\) at level \(l+1\). This gives top-down edges \((i \leftarrow \pi(i))\) and bottom-up edges \((\pi(i) \leftarrow i)\), so every fine node has one parent and every parent has up to four children.</li>
+</ul>
+<p>Every edge carries geometry in receiver grid units and an edge-type index \(\tau_{ij} \in \{\text{loc}, \text{knn}, \text{td}, \text{bu}\}\):</p>
+$$\boldsymbol{\delta}_{ij} = \frac{\mathbf{p}_j - \mathbf{p}_i}{s_{l(i)}}, \qquad
+\mathbf{g}_{ij} = \Big[\frac{\boldsymbol{\delta}_{ij}}{1+\|\boldsymbol{\delta}_{ij}\|},\ \log\big(1+\|\boldsymbol{\delta}_{ij}\|\big)\Big] \in \mathbb{R}^3. \tag{6}$$
+<p>Relational ambiguity is modeled by the heavy-tailed Student-<i>t</i> kernel of MFG-YOLO, normalised over each receiver's neighbourhood \(\mathcal{N}(i)\):</p>
+$$k_{ij} = \Big(1 + \frac{\|\mathbf{h}_i - \mathbf{h}_j\|^2}{\alpha}\Big)^{-\frac{\alpha+1}{2}}, \qquad
+w_{ij} = \frac{\exp(k_{ij})}{\sum_{j'\in\mathcal{N}(i)}\exp(k_{ij'})}, \qquad \alpha = 1. \tag{7}$$
+<p>A Dirichlet energy regularises the embedding toward the fuzzy structure:</p>
+$$\mathcal{L}_{\text{graph}} = \frac{1}{|\mathcal{E}|}\sum_{(i\leftarrow j)\in\mathcal{E}} w_{ij}\,\|\mathbf{h}_i - \mathbf{h}_j\|^2. \tag{8}$$
+<p>Local and cross-scale edges depend only on the pyramid shape and are cached; only kNN edges are recomputed per
+image. A batch of \(b\) images is one disjoint graph with node offsets \(bN\).</p>
+
+<h3>3.4&nbsp;&nbsp;C2: Uncertainty-conditioned relational routing</h3>
+<div class='plain'><div class='plain-title'>In plain words: C2</div><p><b>Goal.</b> Out of about a million possible links, keep only the ones that will actually help, and give more help to the
+        locations that need it.</p>
+        <p><b>How.</b> A small network looks at each link (both cells' descriptions, the fuzzy strength, both cells' uncertainties,
+        direction and distance, and link type) and gives it a score. Each cell then keeps its top 4 local links and top 2 of each other
+        type. A cell's allowance grows by up to 2 per type when it is uncertain.</p>
+        <p><b>How it learns.</b> Two teachers. The first says "two cells inside the same object should usually talk". The second,
+        and more important, says "this link actually lowered the detection error last time you tried it". That second signal comes from
+        measuring, every other training step, how the error would change if each link were made stronger.</p></div><figure class='keep'><svg class='fig' viewBox='0 0 660 256' xmlns='http://www.w3.org/2000/svg' font-family='Helvetica Neue, Arial, sans-serif' role='img'><defs><marker id='ag' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#8a8578'/></marker><marker id='ap' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#3b2f7a'/></marker><marker id='ar' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#b4432f'/></marker><marker id='agr' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#2f7a4a'/></marker></defs><text x='165' y='18' text-anchor='middle' font-size='11' font-weight='600' fill='#1a1a1a'>Confident location (clear car)</text><line x1='243.0' y1='112.0' x2='185.0' y2='112.0' stroke='#3b2f7a' stroke-width='2.2' marker-end='url(#ap)'/><circle cx='243.0' cy='112.0' r='9' fill='#fff' stroke='#8a8578'/><text x='265.0' y='115.0' text-anchor='middle' font-size='8.5' font-weight='400' fill='#3b2f7a'>0.92</text><line x1='228.1' y1='154.3' x2='181.2' y2='123.8' stroke='#3b2f7a' stroke-width='2.2' marker-end='url(#ap)'/><circle cx='228.1' cy='154.3' r='9' fill='#fff' stroke='#8a8578'/><text x='245.9' y='169.1' text-anchor='middle' font-size='8.5' font-weight='400' fill='#3b2f7a'>0.85</text><line x1='189.1' y1='180.5' x2='171.2' y2='131.0' stroke='#c4c4c4' stroke-width='1' stroke-dasharray='3 3'/><circle cx='189.1' cy='180.5' r='9' fill='#fff' stroke='#8a8578'/><text x='195.9' y='202.5' text-anchor='middle' font-size='8.5' font-weight='400' fill='#9a9a9a'>0.15</text><line x1='140.9' y1='180.5' x2='158.8' y2='131.0' stroke='#3b2f7a' stroke-width='2.2' marker-end='url(#ap)'/><circle cx='140.9' cy='180.5' r='9' fill='#fff' stroke='#8a8578'/><text x='134.1' y='202.5' text-anchor='middle' font-size='8.5' font-weight='400' fill='#3b2f7a'>0.78</text><line x1='101.9' y1='154.3' x2='148.8' y2='123.8' stroke='#c4c4c4' stroke-width='1' stroke-dasharray='3 3'/><circle cx='101.9' cy='154.3' r='9' fill='#fff' stroke='#8a8578'/><text x='84.1' y='169.1' text-anchor='middle' font-size='8.5' font-weight='400' fill='#9a9a9a'>0.30</text><line x1='87.0' y1='112.0' x2='145.0' y2='112.0' stroke='#c4c4c4' stroke-width='1' stroke-dasharray='3 3'/><circle cx='87.0' cy='112.0' r='9' fill='#fff' stroke='#8a8578'/><text x='65.0' y='115.0' text-anchor='middle' font-size='8.5' font-weight='400' fill='#9a9a9a'>0.66</text><line x1='101.9' y1='69.7' x2='148.8' y2='100.2' stroke='#c4c4c4' stroke-width='1' stroke-dasharray='3 3'/><circle cx='101.9' cy='69.7' r='9' fill='#fff' stroke='#8a8578'/><text x='84.1' y='60.9' text-anchor='middle' font-size='8.5' font-weight='400' fill='#9a9a9a'>0.10</text><line x1='140.9' y1='43.5' x2='158.8' y2='93.0' stroke='#3b2f7a' stroke-width='2.2' marker-end='url(#ap)'/><circle cx='140.9' cy='43.5' r='9' fill='#fff' stroke='#8a8578'/><text x='134.1' y='27.5' text-anchor='middle' font-size='8.5' font-weight='400' fill='#3b2f7a'>0.71</text><line x1='189.1' y1='43.5' x2='171.2' y2='93.0' stroke='#c4c4c4' stroke-width='1' stroke-dasharray='3 3'/><circle cx='189.1' cy='43.5' r='9' fill='#fff' stroke='#8a8578'/><text x='195.9' y='27.5' text-anchor='middle' font-size='8.5' font-weight='400' fill='#9a9a9a'>0.40</text><line x1='228.1' y1='69.7' x2='181.2' y2='100.2' stroke='#c4c4c4' stroke-width='1' stroke-dasharray='3 3'/><circle cx='228.1' cy='69.7' r='9' fill='#fff' stroke='#8a8578'/><text x='245.9' y='60.9' text-anchor='middle' font-size='8.5' font-weight='400' fill='#9a9a9a'>0.20</text><circle cx='165' cy='112' r='17' fill='#dff0e4' stroke='#2f7a4a' stroke-width='1.6'/><text x='165' y='116' text-anchor='middle' font-size='12' font-weight='700' fill='#1a1a1a'>i</text><text x='165' y='228' text-anchor='middle' font-size='10' font-weight='600' fill='#2f7a4a'>budget K = 4 → keeps 4 links</text><text x='495' y='18' text-anchor='middle' font-size='11' font-weight='600' fill='#1a1a1a'>Uncertain location (occluded pedestrian)</text><line x1='573.0' y1='112.0' x2='515.0' y2='112.0' stroke='#3b2f7a' stroke-width='2.2' marker-end='url(#ap)'/><circle cx='573.0' cy='112.0' r='9' fill='#fff' stroke='#8a8578'/><text x='595.0' y='115.0' text-anchor='middle' font-size='8.5' font-weight='400' fill='#3b2f7a'>0.92</text><line x1='558.1' y1='154.3' x2='511.2' y2='123.8' stroke='#3b2f7a' stroke-width='2.2' marker-end='url(#ap)'/><circle cx='558.1' cy='154.3' r='9' fill='#fff' stroke='#8a8578'/><text x='575.9' y='169.1' text-anchor='middle' font-size='8.5' font-weight='400' fill='#3b2f7a'>0.85</text><line x1='519.1' y1='180.5' x2='501.2' y2='131.0' stroke='#c4c4c4' stroke-width='1' stroke-dasharray='3 3'/><circle cx='519.1' cy='180.5' r='9' fill='#fff' stroke='#8a8578'/><text x='525.9' y='202.5' text-anchor='middle' font-size='8.5' font-weight='400' fill='#9a9a9a'>0.15</text><line x1='470.9' y1='180.5' x2='488.8' y2='131.0' stroke='#3b2f7a' stroke-width='2.2' marker-end='url(#ap)'/><circle cx='470.9' cy='180.5' r='9' fill='#fff' stroke='#8a8578'/><text x='464.1' y='202.5' text-anchor='middle' font-size='8.5' font-weight='400' fill='#3b2f7a'>0.78</text><line x1='431.9' y1='154.3' x2='478.8' y2='123.8' stroke='#c4c4c4' stroke-width='1' stroke-dasharray='3 3'/><circle cx='431.9' cy='154.3' r='9' fill='#fff' stroke='#8a8578'/><text x='414.1' y='169.1' text-anchor='middle' font-size='8.5' font-weight='400' fill='#9a9a9a'>0.30</text><line x1='417.0' y1='112.0' x2='475.0' y2='112.0' stroke='#3b2f7a' stroke-width='2.2' marker-end='url(#ap)'/><circle cx='417.0' cy='112.0' r='9' fill='#fff' stroke='#8a8578'/><text x='395.0' y='115.0' text-anchor='middle' font-size='8.5' font-weight='400' fill='#3b2f7a'>0.66</text><line x1='431.9' y1='69.7' x2='478.8' y2='100.2' stroke='#c4c4c4' stroke-width='1' stroke-dasharray='3 3'/><circle cx='431.9' cy='69.7' r='9' fill='#fff' stroke='#8a8578'/><text x='414.1' y='60.9' text-anchor='middle' font-size='8.5' font-weight='400' fill='#9a9a9a'>0.10</text><line x1='470.9' y1='43.5' x2='488.8' y2='93.0' stroke='#3b2f7a' stroke-width='2.2' marker-end='url(#ap)'/><circle cx='470.9' cy='43.5' r='9' fill='#fff' stroke='#8a8578'/><text x='464.1' y='27.5' text-anchor='middle' font-size='8.5' font-weight='400' fill='#3b2f7a'>0.71</text><line x1='519.1' y1='43.5' x2='501.2' y2='93.0' stroke='#3b2f7a' stroke-width='2.2' marker-end='url(#ap)'/><circle cx='519.1' cy='43.5' r='9' fill='#fff' stroke='#8a8578'/><text x='525.9' y='27.5' text-anchor='middle' font-size='8.5' font-weight='400' fill='#3b2f7a'>0.40</text><line x1='558.1' y1='69.7' x2='511.2' y2='100.2' stroke='#c4c4c4' stroke-width='1' stroke-dasharray='3 3'/><circle cx='558.1' cy='69.7' r='9' fill='#fff' stroke='#8a8578'/><text x='575.9' y='60.9' text-anchor='middle' font-size='8.5' font-weight='400' fill='#9a9a9a'>0.20</text><circle cx='495' cy='112' r='17' fill='#f8e6cf' stroke='#c07a1e' stroke-width='1.6'/><text x='495' y='116' text-anchor='middle' font-size='12' font-weight='700' fill='#1a1a1a'>i</text><text x='495' y='228' text-anchor='middle' font-size='10' font-weight='600' fill='#c07a1e'>budget K = 4 + 2 → keeps 6 links</text><text x='330' y='248' text-anchor='middle' font-size='9.5' font-weight='400' fill='#555555'>numbers = router score s_ij · solid = kept and used for messages · dashed = dropped</text></svg><figcaption>Figure 3. Routing at two locations. Both start with the same ten candidate links and the same scores, but the uncertain location is allowed to keep two more.</figcaption></figure>
+<p><b>Edge utility.</b> Each candidate is described by a 140-dimensional vector</p>
+$$\mathbf{x}_{ij} = \big[\mathbf{h}_i;\ \mathbf{h}_j;\ k_{ij};\ U^a_i;\ U^e_i;\ U^a_j;\ U^e_j;\ \mathbf{g}_{ij};\ \mathbf{e}_{\tau_{ij}}\big] \in \mathbb{R}^{64+64+1+4+3+4}, \tag{9}$$
+<p>with a learned type embedding \(\mathbf{e}_\tau \in \mathbb{R}^4\), and scored by a two-layer MLP. Splitting the first layer
+\(W_1 = [W_r, W_s, W_e]\) gives an exact factorisation in which the node terms are computed once per node rather than once per edge:</p>
+$$s_{ij} = \mathbf{w}_2^\top \operatorname{ReLU}\!\big(W_r\mathbf{h}_i + W_s\mathbf{h}_j + W_e\,\mathbf{x}^{\text{edge}}_{ij} + \mathbf{b}_1\big) + b_2. \tag{10}$$
+
+<p><b>Uncertainty-adaptive budgets.</b> For receiver \(i\) and edge type \(\tau\) with base budget \(K^\tau\)
+(\(K^{\text{loc}}=4\), \(K^{\text{knn}}=K^{\text{td}}=K^{\text{bu}}=2\)) and gain \(\gamma = 2\):</p>
+$$K_i^\tau = K^\tau + \operatorname{round}\big(\gamma\,\max(U^a_i, U^e_i)\big), \qquad
+m^{\text{hard}}_{ij} = \mathbb{1}\Big[\operatorname{rank}_{j'\in\mathcal{N}_\tau(i)}(s_{ij'})\big|_{j} < K_i^{\tau_{ij}}\Big]. \tag{11}$$
+<p>Ambiguous locations therefore gather more context, while confident ones stay sparse. A straight-through estimator [12] keeps
+the binary forward selection differentiable:</p>
+$$m_{ij} = m^{\text{hard}}_{ij} + \sigma(s_{ij}) - \operatorname{sg}\big(\sigma(s_{ij})\big). \tag{12}$$
+
+<div class="algo">
+<div class="title">Algorithm 1. Vectorised per-receiver, per-type top-K selection</div>
+<span class="kw">Input:</span> scores \(\mathbf{s}\in\mathbb{R}^E\), receivers \(\mathbf{i}\), types \(\boldsymbol{\tau}\), budgets \(\mathbf{K}\in\mathbb{N}^E\).
+<span class="kw">Output:</span> \(\mathbf{m}^{\text{hard}} \in \{0,1\}^E\).
+<ol>
+  <li>Group id \(g_e \leftarrow 4\,i_e + \tau_e\).</li>
+  <li>Score rank \(\rho_e \leftarrow\) position of \(e\) in \(\operatorname{argsort}(-\mathbf{s})\).</li>
+  <li>\(o \leftarrow \operatorname{argsort}(g_e\,E + \rho_e)\) <span class="note">(groups contiguous; within a group, by descending score)</span>.</li>
+  <li>\(c \leftarrow \operatorname{bincount}(g_o)\); start of each group \(a \leftarrow \operatorname{cumsum}(c) - c\).</li>
+  <li>Within-group rank \(q_n \leftarrow n - a_{g_{o_n}}\) for \(n = 0,\dots,E-1\).</li>
+  <li>\(m^{\text{hard}}_{o_n} \leftarrow \mathbb{1}[q_n < K_{o_n}]\). <span class="note">Cost \(O(E\log E)\) with no Python loop over nodes.</span></li>
+</ol>
+</div>
+
+<p><b>Instance supervision.</b> Let \(o(i)\) be the smallest ground-truth box whose central region contains \(\mathbf{p}_i\)
+(\(|\mathbf{p}_i - \mathbf{c}_b| < \tfrac{\rho}{2}\,\mathbf{w}_b\) element-wise, \(\rho = 0.5\)), or \(\varnothing\). On same-scale edges \(\mathcal{E}_{\text{ss}}\),</p>
+$$y^{\text{inst}}_{ij} = \mathbb{1}\big[o(i) = o(j) \neq \varnothing\big], \qquad
+\mathcal{L}_{\text{inst}} = \frac{1}{|\mathcal{E}_{\text{ss}}|}\sum_{\mathcal{E}_{\text{ss}}} \operatorname{BCE}_{\omega}\big(s_{ij}, y^{\text{inst}}_{ij}\big),\quad \omega = 3. \tag{13}$$
+
+<p><b>Benefit supervision.</b> The router is taught which relations reduce the detection loss. Every \(\Delta = 2\) steps
+a dense pass sends messages along <em>all</em> candidates (unselected ones have \(m_{ij} = 0\) and no forward effect) and
+measures the first-order benefit of strengthening each edge:</p>
+$$\begin{gathered}
+b_{ij} = -\frac{\partial \mathcal{L}_{\text{det}}}{\partial m_{ij}}, \qquad
+y^{\text{ben}}_{ij} = \mathbb{1}\big[b_{ij} > 0\ \wedge\ b_{ij} \ge Q_{q}(\{b > 0\})\big], \\
+\mathcal{L}_{\text{benefit}} = \frac1{|\mathcal{E}|}\sum_{\mathcal{E}}\operatorname{BCE}\big(s_{ij}, y^{\text{ben}}_{ij}\big),
+\end{gathered} \tag{14}$$
+<p>where \(Q_q\) is the \(q = 0.75\) quantile of the positive benefits. Under mixed precision the gradient is taken on the
+loss-scaled \(\mathcal{L}_{\text{det}}\); the labels depend only on ranks and signs, so they are unaffected by the scale.</p>
+
+<h3>3.5&nbsp;&nbsp;C3: Benefit-aware multi-scale message passing</h3>
+<div class='plain'><div class='plain-title'>In plain words: C3</div><p><b>Goal.</b> Let each cell learn from the neighbours the router picked, without being misled by bad advice.</p>
+        <p><b>How.</b> Every chosen neighbour sends a short message. Attention decides how the cell divides its listening between
+        neighbours, and a separate gate (a number between 0 and 1) decides how much of each message to let through. The gate looks at who is
+        listening, what the message says, how good the router thought the link was, and how uncertain both sides are. All accepted messages
+        are added up and the cell updates its description with a GRU, a small memory unit that blends the old description with the news.</p>
+        <p><b>Efficiency.</b> Only kept links send messages, which is where the computing saving comes from. Everything that depends
+        on a single cell, such as its message, is computed once per cell, not once per link.</p></div>
+<p>Let \(\mathcal{A}\) be the active edges: the routed edges \(\{m^{\text{hard}}_{ij} = 1\}\) during normal steps and at
+inference, or all candidates during a benefit pass. Messages and attention scores are computed per node and gathered per edge:</p>
+$$\mathbf{v}_j = \operatorname{MLP}(\mathbf{h}_j), \qquad
+e_{ij} = \operatorname{LeakyReLU}_{0.2}\big(\mathbf{a}_r^\top\mathbf{h}_i + \mathbf{a}_s^\top\mathbf{h}_j\big). \tag{15}$$
+<p>The routing mask enters the attention normaliser, which is computed with a per-receiver maximum for float16 stability:</p>
+$$\alpha_{ij} = \frac{m_{ij}\,\exp\big(e_{ij} - \mu_i\big)}{\sum_{j'\in\mathcal{A}(i)} m_{ij'}\,\exp\big(e_{ij'} - \mu_i\big)}, \qquad \mu_i = \max_{j'\in\mathcal{A}(i)} e_{ij'}. \tag{16}$$
+<p>A benefit gate scales each message using the receiver state, the message content, the router score and both uncertainties:</p>
+$$\beta_{ij} = \sigma\big(\mathbf{q}_r^\top\mathbf{h}_i + \mathbf{q}_m^\top\mathbf{v}_j + \mathbf{q}_e^\top[s_{ij},\,U^a_i,\,U^e_i,\,U^e_j] + c\big). \tag{17}$$
+$$\mathbf{a}_i = \sum_{j\in\mathcal{A}(i)} \beta_{ij}\,\alpha_{ij}\,\mathbf{v}_j, \qquad
+\mathbf{h}'_i = \operatorname{GRU}(\mathbf{a}_i, \mathbf{h}_i), \qquad
+H_i = \operatorname{LN}(W_o\mathbf{h}'_i) \in \mathbb{R}^{C}. \tag{18}$$
+<p>\(H_i\) is reshaped into a pyramid \(\{H_l\}\) aligned with \(\{F_l\}\). Because \(m_{ij}\) appears only inside
+(16), an unselected edge still has a non-zero gradient,
+\(\partial\alpha_{ij}/\partial m_{ij}\big|_{m_{ij}=0} = \exp(e_{ij}-\mu_i)/S_i\) with \(S_i\) the normaliser over the selected
+edges, which makes the benefit \(b_{ij}\) in (14) defined for every candidate. Multiplying the message by \(m_{ij}\) a
+second time would remove that gradient at \(m_{ij} = 0\).</p>
+
+<h3>3.6&nbsp;&nbsp;C4: Uncertainty-aware feature fusion</h3>
+<div class='plain'><div class='plain-title'>In plain words: C4</div><p><b>Goal.</b> Combine "what I see" (F) with "what my neighbours told me" (H) in the right proportion for each location.</p>
+        <p><b>How.</b> A small network looks at both descriptions and both uncertainty scores and outputs a mixing weight \(\lambda\)
+        for each of the 256 channels. \(\lambda = 1\) means "trust my own eyes", \(\lambda = 0\) means "trust the neighbours". It starts at about
+        0.88, so switching it on at the beginning of Stage 4 does not disturb a detector that already works, and it learns from there.</p></div><figure class='keep'><svg class='fig' viewBox='0 0 640 232' xmlns='http://www.w3.org/2000/svg' font-family='Helvetica Neue, Arial, sans-serif' role='img'><defs><marker id='ag' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#8a8578'/></marker><marker id='ap' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#3b2f7a'/></marker><marker id='ar' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#b4432f'/></marker><marker id='agr' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#2f7a4a'/></marker></defs><text x='165' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#1a1a1a'>C3 · one location gathers context</text><circle cx='50' cy='50' r='9' fill='#fff' stroke='#8a8578'/><text x='38' y='35' text-anchor='start' font-size='9' font-weight='400' fill='#555555'>j1: same car, clear view</text><line x1='60' y1='50' x2='232' y2='118' stroke='#3b2f7a' stroke-width='3.4' marker-end='url(#ap)' opacity='0.9'/><text x='150' y='76.58139534883722' text-anchor='middle' font-size='9' font-weight='600' fill='#3b2f7a'>β = 0.9</text><circle cx='50' cy='118' r='9' fill='#fff' stroke='#8a8578'/><text x='38' y='103' text-anchor='start' font-size='9' font-weight='400' fill='#555555'>j2: road next to it</text><line x1='60' y1='118' x2='232' y2='118' stroke='#3b2f7a' stroke-width='1.8' marker-end='url(#ap)' opacity='0.9'/><text x='150' y='109.0' text-anchor='middle' font-size='9' font-weight='600' fill='#3b2f7a'>β = 0.5</text><circle cx='50' cy='186' r='9' fill='#fff' stroke='#8a8578'/><text x='38' y='210' text-anchor='start' font-size='9' font-weight='400' fill='#555555'>j3: tree shadow (noise)</text><line x1='60' y1='186' x2='232' y2='118' stroke='#3b2f7a' stroke-width='0.7' marker-end='url(#ap)' opacity='0.9'/><text x='150' y='166.41860465116278' text-anchor='middle' font-size='9' font-weight='600' fill='#3b2f7a'>β = 0.1</text><circle cx='250' cy='118' r='17' fill='#f8e6cf' stroke='#c07a1e' stroke-width='1.6'/><text x='250' y='122' text-anchor='middle' font-size='12' font-weight='700' fill='#1a1a1a'>i</text><path d='M268,118 H296' fill='none' stroke='#3b2f7a' stroke-width='1.3' marker-end='url(#ap)'/><rect x='298' y='98' width='50' height='40' rx='6' fill='#ece9f8' stroke='#3b2f7a' stroke-width='1.2'/><text x='323.0' y='122.0' text-anchor='middle' font-size='11' font-weight='600' fill='#3b2f7a'>GRU</text><text x='323' y='152' text-anchor='middle' font-size='9.5' font-weight='400' fill='#3b2f7a'>update → H_i</text><line x1='372' y1='20' x2='372' y2='220' stroke='#dddddd'/><text x='530' y='16' text-anchor='middle' font-size='11' font-weight='600' fill='#1a1a1a'>C4 · how much to trust each source</text><rect x='386' y='52' width='112' height='38' rx='6' fill='#f1efe9' stroke='#8a8578' stroke-width='1.2'/><text x='442.0' y='68.0' text-anchor='middle' font-size='11' font-weight='600' fill='#1a1a1a'>F_i</text><text x='442.0' y='83.0' text-anchor='middle' font-size='9.5' fill='#555555'>what it sees</text><rect x='386' y='146' width='112' height='38' rx='6' fill='#ece9f8' stroke='#3b2f7a' stroke-width='1.2'/><text x='442.0' y='162.0' text-anchor='middle' font-size='11' font-weight='600' fill='#3b2f7a'>H_i</text><text x='442.0' y='177.0' text-anchor='middle' font-size='9.5' fill='#555555'>what neighbours say</text><path d='M498,71 H520 V104' fill='none' stroke='#8a8578' stroke-width='1.3' marker-end='url(#ag)'/><path d='M498,165 H520 V136' fill='none' stroke='#3b2f7a' stroke-width='1.3' marker-end='url(#ap)'/><circle cx='520' cy='120' r='16' fill='#fff' stroke='#3b2f7a' stroke-width='1.4'/><text x='520' y='125' text-anchor='middle' font-size='13' font-weight='700' fill='#3b2f7a'>λ</text><path d='M536,120 H566' fill='none' stroke='#3b2f7a' stroke-width='1.3' marker-end='url(#ap)'/><rect x='568' y='101' width='54' height='38' rx='6' fill='#ece9f8' stroke='#3b2f7a' stroke-width='1.2'/><text x='595.0' y='124.0' text-anchor='middle' font-size='12' font-weight='600' fill='#3b2f7a'>Z_i</text><text x='510' y='208' text-anchor='middle' font-size='9.5' font-weight='600' fill='#2f7a4a'>clear object: λ ≈ 0.9 (mostly F)</text><text x='510' y='222' text-anchor='middle' font-size='9.5' font-weight='600' fill='#c07a1e'>occluded object: λ lower (more H)</text></svg><figcaption>Figure 4. Left: C3 passes helpful messages strongly and suppresses noise (arrow width = gate value β). Right: C4 mixes the cell's own view F with its neighbours' view H.</figcaption></figure>
+$$\begin{gathered}
+\boldsymbol{\lambda}_i = \sigma\Big(W_2\,\operatorname{SiLU}\big(\operatorname{GN}(W_1[F_i;\,H_i;\,U^a_i;\,U^e_i])\big) + \mathbf{b}_2\Big) \in (0,1)^C, \\
+Z_i = \boldsymbol{\lambda}_i \odot F_i + (1 - \boldsymbol{\lambda}_i) \odot H_i,
+\end{gathered} \tag{19}$$
+<p>with \(1\times1\) convolutions \(W_1, W_2\). The bias is initialised to \(\mathbf{b}_2 = 2\), so \(\boldsymbol{\lambda} \approx 0.88\)
+and fusion starts close to the visual features. The ablation baselines are \(Z = \tfrac12(F + H)\) and \(Z = F + H\).</p>
+
+<h3>3.7&nbsp;&nbsp;Probabilistic detection head</h3>
+<div class='plain'><div class='plain-title'>In plain words: the head</div><p><b>Goal.</b> Turn the fused map into boxes that come with honest error bars.</p>
+        <p><b>How.</b> For every cell the head predicts which class is present, how far the box edges are to the left, top, right and
+        bottom, how close the cell is to the object's centre, and how unsure it is about each edge. Training uses the standard FCOS recipe
+        (focal loss for classes, CIoU for boxes) plus a likelihood term that teaches the edge uncertainty to match the real error. At test
+        time, every detection is reported with its box spread in pixels and with C1's two uncertainty scores at its location.</p></div>
+<p>An anchor-free FCOS head [7] with separate classification and regression towers (four \(3\times3\) convolutions each)
+predicts, per location, class logits \(\mathbf{q}_i\), stride-normalised distances
+\(\mathbf{d}_i = \exp(\kappa_l\,\mathbf{r}_i) \in \mathbb{R}^4_{+}\) to the left, top, right and bottom box sides
+(learnable level scale \(\kappa_l\)), a centerness logit \(\hat{c}_i\) and box log-variances \(\hat{\mathbf{u}}_i \in \mathbb{R}^4\).</p>
+<p><b>Assignment.</b> A location is positive for box \(b\) if it lies inside \(b\), within \(1.5\,s_l\) of its center, and
+\(\max_r t_{i,r}\,s_l\) falls in the level range \([0,64], [64,128], [128,\infty)\) pixels. Ties go to the smallest box,
+and locations inside annotated ignore regions are excluded. The centerness target is
+\(c^\star_i = \sqrt{\tfrac{\min(l,r)}{\max(l,r)}\cdot\tfrac{\min(t,b)}{\max(t,b)}}\).</p>
+$$\mathcal{L}_{\text{det}} = \frac{1}{|\mathcal{P}|}\Big[\sum_{i}\operatorname{FL}(\mathbf{q}_i, y_i)
++ \sum_{i\in\mathcal{P}} c^\star_i\,\mathcal{L}_{\text{CIoU}}(\hat{b}_i, b_i)
++ \sum_{i\in\mathcal{P}}\operatorname{BCE}(\hat{c}_i, c^\star_i)\Big], \tag{20}$$
+$$\mathcal{L}_{\text{var}} = \frac{1}{|\mathcal{P}|}\sum_{i\in\mathcal{P}}\sum_{r=1}^4
+\Big(\tfrac12 e^{-\hat{u}_{i,r}}\big(\log t_{i,r} - \log\operatorname{sg}(d_{i,r})\big)^2 + \tfrac12\hat{u}_{i,r}\Big), \tag{21}$$
+<p>with sigmoid focal loss FL (\(\gamma = 2\), \(\alpha = 0.25\)) [8] and Complete-IoU loss [9]. Detaching the mean in (21)
+lets the variance model the head's residual error without moving the boxes.</p>
+<p><b>Inference.</b> Scores are \(\varsigma_{ik} = \sqrt{\sigma(q_{ik})\,\sigma(\hat{c}_i)}\). Candidates with
+\(\varsigma > 0.05\) (top 1000 per level) are decoded to boxes, filtered by class-wise NMS (IoU 0.6) and capped at 500 per image.
+Each detection carries its location's \(U^a_i\), \(U^e_i\) and a per-side one-sigma box deviation in pixels:</p>
+$$\sigma^{\text{px}}_{i,r} = s_l\,d_{i,r}\,\big(e^{\hat{u}_{i,r}/2} - 1\big). \tag{22}$$
+
+<h3>3.8&nbsp;&nbsp;Cross-scale consistency, total objective and curriculum</h3>
+<div class='plain'><div class='plain-title'>In plain words: training</div><p><b>Cross-scale consistency.</b> The class guess for an object at one zoom level should roughly agree with the guess one level
+        coarser. A small penalty encourages that.</p>
+        <p><b>Why stages.</b> Switching everything on from the first epoch would let random graph features confuse a detector that cannot yet
+        detect anything. So training grows the model in four stages: first a solid detector with uncertainty, then the graph, then routing and
+        message passing (with the graph features added at only 10% strength, so the router gets feedback without destabilising things), and
+        finally the learned fusion gate.</p></div><figure class='keep'><svg class='fig' viewBox='0 0 640 112' xmlns='http://www.w3.org/2000/svg' font-family='Helvetica Neue, Arial, sans-serif' role='img'><defs><marker id='ag' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#8a8578'/></marker><marker id='ap' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#3b2f7a'/></marker><marker id='ar' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#b4432f'/></marker><marker id='agr' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#2f7a4a'/></marker></defs><rect x='20.0' y='26' width='120.0' height='44' fill='#f1efe9' stroke='#8a8578'/><text x='80.0' y='44' text-anchor='middle' font-size='11' font-weight='700' fill='#1a1a1a'>Stage 1</text><text x='80.0' y='60' text-anchor='middle' font-size='9' font-weight='400' fill='#555555'>detector + C1</text><text x='20.0' y='84' text-anchor='start' font-size='9' font-weight='400' fill='#555555'>1</text><rect x='140.0' y='26' width='120.0' height='44' fill='#e4e0f3' stroke='#3b2f7a'/><text x='200.0' y='44' text-anchor='middle' font-size='11' font-weight='700' fill='#1a1a1a'>Stage 2</text><text x='200.0' y='60' text-anchor='middle' font-size='9' font-weight='400' fill='#555555'>+ fuzzy graph</text><text x='140.0' y='84' text-anchor='start' font-size='9' font-weight='400' fill='#555555'>31</text><rect x='260.0' y='26' width='120.0' height='44' fill='#d7d1ef' stroke='#3b2f7a'/><text x='320.0' y='44' text-anchor='middle' font-size='11' font-weight='700' fill='#1a1a1a'>Stage 3</text><text x='320.0' y='60' text-anchor='middle' font-size='9' font-weight='400' fill='#555555'>+ C2 router, C3 messages</text><text x='260.0' y='84' text-anchor='start' font-size='9' font-weight='400' fill='#555555'>61</text><rect x='380.0' y='26' width='240.0' height='44' fill='#c6bde8' stroke='#3b2f7a'/><text x='500.0' y='44' text-anchor='middle' font-size='11' font-weight='700' fill='#1a1a1a'>Stage 4</text><text x='500.0' y='60' text-anchor='middle' font-size='9' font-weight='400' fill='#555555'>+ C4 fusion gate (full model)</text><text x='380.0' y='84' text-anchor='start' font-size='9' font-weight='400' fill='#555555'>91</text><text x='620' y='84' text-anchor='end' font-size='9' font-weight='400' fill='#555555'>150</text><text x='320' y='14' text-anchor='middle' font-size='9.5' font-weight='400' fill='#555555'>training epochs</text><text x='320' y='104' text-anchor='middle' font-size='9.5' font-weight='400' fill='#555555'>each stage keeps everything from the stages before it</text></svg><figcaption>Figure 5. The four-stage training curriculum over 150 epochs.</figcaption></figure>
+<p>For each ground-truth center, let \(\mathbf{q}^{(l)}\) be the logits at its cell on level \(l\), using the smallest box when
+several share a cell. Predictions are aligned across adjacent levels with the coarser level as a detached teacher:</p>
+$$\mathcal{L}_{\text{cons}} = \frac{1}{|\mathcal{S}|}\sum_{(l,\text{img})\in\mathcal{S}} \frac{1}{n}\sum_{\text{objects}}
+\operatorname{KL}\Big(\operatorname{softmax}\big(\operatorname{sg}(\mathbf{q}^{(l+1)})\big)\,\Big\|\,\operatorname{softmax}\big(\mathbf{q}^{(l)}\big)\Big). \tag{23}$$
+<p>The training objective at curriculum stage \(\kappa \in \{1,2,3,4\}\) is</p>
+$$\begin{aligned}
+\mathcal{L} = {} & \mathcal{L}_{\text{det}} + \lambda_{\text{var}}\mathcal{L}_{\text{var}} + \lambda_u\mathcal{L}_u
++ \mathbb{1}[\kappa\ge2]\,\lambda_g\mathcal{L}_{\text{graph}} \\
+& + \mathbb{1}[\kappa\ge3]\big(\lambda_{\text{inst}}\mathcal{L}_{\text{inst}} + \lambda_{\text{ben}}\mathcal{L}_{\text{benefit}}\big)
++ \mathbb{1}[\kappa=4]\,\lambda_c\mathcal{L}_{\text{cons}},
+\end{aligned} \tag{24}$$
+<p>with \(\lambda_{\text{var}} = \lambda_u = 0.5\), \(\lambda_g = 0.1\), \(\lambda_{\text{inst}} = \lambda_{\text{ben}} = 0.2\),
+\(\lambda_c = 0.1\); \(\mathcal{L}_{\text{benefit}}\) is active only on benefit steps.</p>
+
+<div class="keep"><table>
+<tr><th>Stage</th><th>Epochs</th><th>Input to the head</th><th>Active losses</th></tr>
+<tr><td>1</td><td>1–30</td><td>\(F\) (no Monte Carlo passes)</td><td>det, var, u</td></tr>
+<tr><td>2</td><td>31–60</td><td>\(F\); graph built, \(U^e\) estimated</td><td>+ graph</td></tr>
+<tr><td>3</td><td>61–90</td><td>\(F + 0.1\,H\) (C2 and C3 receive a detection signal)</td><td>+ inst, benefit</td></tr>
+<tr><td>4</td><td>91–150</td><td>\(Z\) from the C4 gate (19)</td><td>+ consistency</td></tr>
+</table>
+<div class="caption">Table 1. Curriculum. At inference the model runs at its checkpoint stage with \(T = 10\) Monte Carlo passes.</div></div>
+
+<div class="algo">
+<div class="title">Algorithm 2. One UCR-MFG training step (stage \(\kappa\), global step \(n\))</div>
+<ol>
+  <li>\(\{F_l\} \leftarrow \operatorname{Backbone}(I)\); \(\{U^a_l, U^e_l\} \leftarrow\) C1 (1)–(4), Monte Carlo only if \(\kappa \ge 2\).</li>
+  <li><span class="kw">if</span> \(\kappa \ge 2\): build \(\mathcal{G} = (\mathbf{h}, \mathcal{E}, \mathbf{g}, k, w)\) by (6)–(7).</li>
+  <li><span class="kw">if</span> \(\kappa \ge 3\):
+    <ol type="a">
+      <li>\(s_{ij}\) by (9)–(10); \(m^{\text{hard}}\) by (11) with Algorithm 1; \(m_{ij}\) by (12).</li>
+      <li>dense \(\leftarrow (n \bmod \Delta = 0)\); \(\mathcal{A} \leftarrow \mathcal{E}\) if dense, else \(\{m^{\text{hard}} = 1\}\).</li>
+      <li>\(H \leftarrow\) C3 (15)–(18) over \(\mathcal{A}\); \(Z \leftarrow F + 0.1H\) if \(\kappa = 3\), else C4 (19).</li>
+    </ol></li>
+  <li>Head on \(Z\) (or \(F\)); assign targets; compute every term of (24) except \(\mathcal{L}_{\text{benefit}}\).</li>
+  <li><span class="kw">if</span> dense: \(b \leftarrow -\nabla_{m}\mathcal{L}_{\text{det}}\) (graph retained); add \(\lambda_{\text{ben}}\mathcal{L}_{\text{benefit}}(s, y^{\text{ben}}(b))\) by (14).</li>
+  <li>Back-propagate \(\mathcal{L}\) with float16 loss scaling; every 2 steps clip \(\|\nabla\|_2 \le 10\) and take an AdamW step.</li>
+</ol>
+</div>
+
+<p><b>Optimisation.</b> AdamW (learning rate \(10^{-4}\), weight decay \(10^{-4}\)) with cosine decay to \(10^{-6}\) over 150 epochs,
+batch size 2 with 2-step gradient accumulation, float16 autocast, \(1024\times1024\) input.
+Validation mAP is computed every 5 epochs and the best model is kept.</p>
+
+<h3>3.9&nbsp;&nbsp;Complexity</h3>
+<div class='plain'><div class='plain-title'>In plain words</div><p>The router is what keeps the cost under control: the graph proposes about 1.27 million links for a batch of two images, but only
+        about 390 thousand carry messages. On a 16 GB Apple-silicon Mac, one full Stage-4 training step takes about 2 seconds.</p></div>
+<p>Per image the candidate set has
+\(|\mathcal{E}| \approx \sum_l H_lW_l\big[(2r+1)^2 - 1\big] + |\mathcal{E}_{\text{knn}}| + 2\sum_{l<3}H_lW_l\) edges, but messages and
+gates are evaluated only on \(\sum_{i,\tau}K_i^\tau\) routed edges, and every per-node quantity in (10) and (15)–(17) is
+computed once per node. At \(1024^2\) with \(r = 2\), a batch of two images has about \(1.27\times10^6\) candidates, of which
+about \(3.9\times10^5\) (31%) are routed.</p>
+
+<h3>3.10&nbsp;&nbsp;Evaluation measures</h3>
+<div class='plain'><div class='plain-title'>In plain words</div><p><b>mAP</b> answers "how many objects did it find, and how tight are the boxes?", averaged over strict and loose overlap
+        thresholds. <b>D-ECE</b> answers "when the model says 80% sure, is it right about 80% of the time?". The <b>AUROC</b> scores answer
+        "do high uncertainty values actually point at the wrong detections?"; 0.5 means no better than chance, and 1.0 means perfect.</p></div>
+<p>Detection accuracy is COCO-style AP averaged over IoU thresholds \(\{0.50, 0.55, \dots, 0.95\}\) with 101-point interpolated
+precision. We also report AP50, AP75 and AP for small (\(<32^2\) px), medium and large (\(>96^2\) px) objects. Unmatched
+detections centered in VisDrone ignore regions are discarded. Calibration is measured by the detection expected
+calibration error over \(M = 15\) confidence bins, counting duplicates and background detections as errors:</p>
+$$\text{D-ECE} = \sum_{m=1}^{M}\frac{|\mathcal{B}_m|}{n}\,\Big|\operatorname{acc}(\mathcal{B}_m) - \operatorname{conf}(\mathcal{B}_m)\Big|. \tag{25}$$
+<p>Uncertainty quality is measured as the AUROC of each of \(U^a\), \(U^e\), \(\bar{\sigma}^{\text{px}}\) and \(1 - \varsigma\) for
+separating false from true detections (true: same class and IoU \(\ge 0.5\)).</p>
+
+
+<h2 class="newpage">4&nbsp;&nbsp;Working with the project</h2>
+<p>This section is a practical guide: how to set the project up, train it, check it and run the experiments the paper needs.
+All commands are run from the project folder.</p>
+
+<h3>4.1&nbsp;&nbsp;Setup and data</h3>
+<pre><code>pip install -r requirements.txt
+pytest tests/                       # 36 automated tests</code></pre>
+<p>Place the datasets under <code>dataset/</code> as described in the README: VisDrone2019-DET is the training set, UAVDT is only used
+for zero-shot testing, and DOTA-v1.5 and SODA-A are optional separate tracks. Before the first training run, audit the data:</p>
+<pre><code>python scripts/validate_data.py --config configs/datasets/visdrone.yaml --split val --samples 548</code></pre>
+
+<h3>4.2&nbsp;&nbsp;Training</h3>
+<pre><code>python scripts/train.py --config configs/experiments/visdrone_primary.yaml
+python scripts/train.py --config configs/experiments/visdrone_primary.yaml --resume latest   # after Ctrl+C or a crash</code></pre>
+<ul>
+  <li>The four stages switch automatically by epoch (Figure 5). The progress bar shows the losses; <code>L_det</code> should fall steadily.</li>
+  <li>Every 5 epochs the model is scored on VisDrone val. The best model is saved as <code>checkpoints/visdrone_primary/best.pth</code>,
+  the newest as <code>latest.pth</code>.</li>
+  <li>Pressing Ctrl+C saves a checkpoint safely; <code>--resume latest</code> continues from it with the optimiser, learning rate and random
+  state restored.</li>
+  <li>Memory: with the default local window <code>r_local: 2</code> a 16 GB Mac stays at about 11–12 GB. The value 3 doubles the
+  number of links and needs a larger GPU.</li>
+</ul>
+
+<h3>4.3&nbsp;&nbsp;Evaluation</h3>
+<pre><code>python scripts/eval.py --config configs/experiments/visdrone_primary.yaml \
+    --weights checkpoints/visdrone_primary/best.pth --split test_dev --output visdrone_testdev.json
+python scripts/eval.py --config configs/experiments/uavdt_zeroshot.yaml \
+    --weights checkpoints/visdrone_primary/best.pth --split test</code></pre>
+<p>The script rebuilds the model from the configuration saved inside the checkpoint and runs it at the stage it was trained to.
+It prints mAP, AP50, AP75, AP for small, medium and large objects, D-ECE, the uncertainty AUROC values and per-class AP. For UAVDT,
+VisDrone's car and van are mapped to car, truck to truck, and bus to bus.</p>
+
+<h3>4.4&nbsp;&nbsp;Ablations: proving each contribution</h3>
+<p>Each contribution can be switched off in <code>configs/model/default.yaml</code>. Train one model per row with the same seed and
+schedule, then compare them with <code>eval.py</code>.</p>
+<table>
+<tr><th>Setting</th><th>What it removes</th><th>Question it answers</th></tr>
+<tr><td><code>router.enabled: false</code></td><td>Routing (every candidate link is used)</td><td>Does selecting links beat using all of them, as in MFG-YOLO?</td></tr>
+<tr><td><code>router.use_uncertainty: false</code></td><td>Uncertainty in the router's scores and budgets</td><td>Is routing better because it is <em>uncertainty-conditioned</em>?</td></tr>
+<tr><td><code>router.k_gain: 0</code></td><td>Larger budgets for uncertain locations</td><td>Does giving uncertain locations more links help?</td></tr>
+<tr><td><code>mpnn.benefit_gate: false</code></td><td>The message gate (\(\beta_{ij} = 1\))</td><td>Does weighing each message help C3?</td></tr>
+<tr><td><code>fusion.mode: fixed</code> / <code>add</code></td><td>The learned fusion gate</td><td>Does reliability-based fusion beat a fixed mix?</td></tr>
+<tr><td><code>uncertainty.mc_passes: 1</code></td><td>Epistemic uncertainty</td><td>Is the dual (two-part) uncertainty needed?</td></tr>
+</table>
+
+<h3>4.5&nbsp;&nbsp;Checking the router</h3>
+<pre><code>python scripts/oracle_router_pilot.py --weights checkpoints/visdrone_primary/best.pth --samples 50</code></pre>
+<p>For each link type, this reports how many candidate links connect two points of the same object, how many of the router's chosen
+links do (its precision), the best possible precision with the same number of links (the oracle), and how many of the useful links the
+router found (recall). A trained router should sit well above the base rate and close to the oracle.</p>
+
+<h2>References</h2>
+<ol class="refs">
+  <li>N. Carion, F. Massa, G. Synnaeve, N. Usunier, A. Kirillov, S. Zagoruyko, “End-to-end object detection with transformers,” <i>ECCV</i>, 2020, pp. 213–229.</li>
+  <li>X. Zhu, W. Su, L. Lu, B. Li, X. Wang, J. Dai, “Deformable DETR: Deformable transformers for end-to-end object detection,” <i>ICLR</i>, 2021.</li>
+  <li>G. Zhao, W. Ge, Y. Yu, “GraphFPN: Graph feature pyramid network for object detection,” <i>ICCV</i>, 2021, pp. 2763–2772.</li>
+  <li>J. Mukhoti, A. Kirsch, J. van Amersfoort, P. H. S. Torr, Y. Gal, “Deep deterministic uncertainty: A new simple baseline,” <i>CVPR</i>, 2023, pp. 24384–24394.</li>
+  <li>Y. Zhao, W. Lv, S. Xu, J. Wei, G. Wang, Q. Dang, Y. Liu, J. Chen, “DETRs beat YOLOs on real-time object detection,” <i>CVPR</i>, 2024, pp. 16965–16974.</li>
+  <li>T. Xie, Q. Wu, T. Yin, M. Gao, W. Ding, W. Pedrycz, “MFG-YOLO: Multi-scale fuzzy graph representation learning for uncertainty-aware object detection,” <i>Expert Systems with Applications</i>, vol. 333, art. 134171, 2027, doi:10.1016/j.eswa.2026.134171.</li>
+  <li>Z. Tian, C. Shen, H. Chen, T. He, “FCOS: Fully convolutional one-stage object detection,” <i>ICCV</i>, 2019, pp. 9627–9636.</li>
+  <li>T.-Y. Lin, P. Goyal, R. Girshick, K. He, P. Dollár, “Focal loss for dense object detection,” <i>ICCV</i>, 2017, pp. 2980–2988.</li>
+  <li>Z. Zheng, P. Wang, W. Liu, J. Li, R. Ye, D. Ren, “Distance-IoU loss: Faster and better learning for bounding box regression,” <i>AAAI</i>, 2020, pp. 12993–13000.</li>
+  <li>Y. Gal, Z. Ghahramani, “Dropout as a Bayesian approximation: Representing model uncertainty in deep learning,” <i>ICML</i>, 2016, pp. 1050–1059.</li>
+  <li>A. Kendall, Y. Gal, “What uncertainties do we need in Bayesian deep learning for computer vision?,” <i>NeurIPS</i>, 2017.</li>
+  <li>Y. Bengio, N. Léonard, A. Courville, “Estimating or propagating gradients through stochastic neurons for conditional computation,” arXiv:1308.3432, 2013.</li>
+</ol>
+
+</body>
+</html>

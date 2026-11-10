@@ -4,37 +4,40 @@ model:
   fpn_channels: 256
   graph_dim: 64
   strides: [8, 16, 32]
-  num_classes: 10
   uncertainty:
     dropout_rate: 0.2
     mc_passes: 10
     sigma_0_sq: 1.0
   graph:
-    r_local: 3
+    r_local: 2             # 3 doubles candidate edges; needs > 16 GB to avoid swapping at 1024 px
     k_feat: 8
-    alpha_student_t: 1.0
-    epsilon_guard: 1.0e-8
-    f1_block_size: 32
+    alpha: 1.0
+    block_size: 32
   router:
+    enabled: true          # ablation: false keeps every candidate edge (MFG-YOLO-style dense graph)
+    use_uncertainty: true  # ablation: false removes Ua/Ue from scoring and budgets
     k_local: 4
     k_feat: 2
     k_cross: 2
-    input_dim: 140
+    k_gain: 2.0            # extra edges per type for a maximally uncertain receiver
     hidden_dim: 64
   mpnn:
-    attn_dim: 32
-    hidden_dim: 64
-    out_dim: 256
+    benefit_gate: true     # ablation: false sets g_ij = 1
   fusion:
-    gate_dim: 256
+    mode: "gate"           # ablation: "fixed" (0.5) or "add"
+    stage3_residual: 0.1
 loss:
-  lambda_det: 1.0
   lambda_u: 0.5
+  lambda_var: 0.5
   lambda_graph: 0.1
   lambda_inst: 0.2
   lambda_benefit: 0.2
   lambda_consistency: 0.1
   benefit_step_interval: 2
   benefit_quantile: 0.75
-  center_sampling_radius: 1.5
-
+  router_pos_weight: 3.0
+inference:
+  score_thresh: 0.05
+  pre_nms_topk: 1000
+  nms_iou: 0.6
+  max_dets: 500

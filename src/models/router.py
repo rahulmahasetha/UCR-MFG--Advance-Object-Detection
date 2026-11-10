@@ -1,128 +1,87 @@
-from typing import Dict, Any, Tuple
+from typing import Sequence
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
+from src.models.graph_ops import NUM_EDGE_TYPES, Graph, Routing
 
 
 class UCRouter(nn.Module):
-    """Contribution 2: Uncertainty-Conditioned Relational Router.
-    
-    Selects informative subgraphs via straight-through Top-K routing conditioned on 
-    node features, spatial geometry, and dual predictive uncertainties (Ua, Ue).
+    """C2: Uncertainty-conditioned relational routing.
+
+    Each candidate edge is scored from a 140-d descriptor [h_i, h_j, k_ij, Ua_i, Ue_i, Ua_j, Ue_j, geometry, type].
+    The first layer is factorised over receiver, sender and edge terms, which is exact and avoids
+    materialising the descriptor. A per-receiver, per-type top-K keeps the best edges; the budget grows
+    with receiver uncertainty so ambiguous locations gather more context. Straight-through masks keep
+    the selection differentiable.
     """
 
     def __init__(
         self,
-        input_dim: int = 140,
+        node_dim: int = 64,
         hidden_dim: int = 64,
-        k_local: int = 4,
-        k_feat: int = 2,
-        k_cross: int = 2,
-        num_edge_types: int = 4,
-        edge_type_dim: int = 4
+        budgets: Sequence[int] = (4, 2, 2, 2),
+        k_gain: float = 2.0,
+        use_uncertainty: bool = True,
+        enabled: bool = True,
+        type_dim: int = 4,
     ):
         super().__init__()
-        self.k_budgets = {
-            0: k_local,   # Local window
-            1: k_feat,    # Feature kNN
-            2: k_cross,   # Cross-scale
-            3: k_cross,   # Cross-scale
-        }
-        self.edge_type_emb = nn.Embedding(num_edge_types, edge_type_dim)
+        self.register_buffer("budgets", torch.tensor(budgets, dtype=torch.long), persistent=False)
+        self.k_gain = k_gain
+        self.use_uncertainty = use_uncertainty
+        self.enabled = enabled
+        self.type_emb = nn.Embedding(NUM_EDGE_TYPES, type_dim)
+        self.recv_proj = nn.Linear(node_dim, hidden_dim)
+        self.send_proj = nn.Linear(node_dim, hidden_dim, bias=False)
+        self.edge_proj = nn.Linear(1 + 4 + 3 + type_dim, hidden_dim, bias=False)
+        self.out = nn.Sequential(nn.ReLU(), nn.Linear(hidden_dim, 1))
 
-        self.router_mlp = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
+    def forward(self, graph: Graph, ua: torch.Tensor, ue: torch.Tensor) -> Routing:
+        recv, send = graph.edge_index
+        if not self.enabled:
+            ones = torch.ones(recv.numel(), device=recv.device)
+            return Routing(scores=torch.zeros_like(ones), mask=ones, selected=ones.bool())
+        if not self.use_uncertainty:
+            ua, ue = torch.zeros_like(ua), torch.zeros_like(ue)
 
-    def assemble_input_vector(
-        self,
-        nodes: torch.Tensor,
-        edge_index: torch.Tensor,
-        kij: torch.Tensor,
-        deltas: torch.Tensor,
-        edge_types: torch.Tensor,
-        ua: torch.Tensor,
-        ue: torch.Tensor
-    ) -> torch.Tensor:
-        """Assembles the exact 140-dimensional candidate edge input vector."""
-        src, tgt = edge_index[0], edge_index[1]
+        edge_feats = torch.cat(
+            [
+                graph.kij.unsqueeze(1),
+                torch.stack([ua[recv], ue[recv], ua[send], ue[send]], dim=1),
+                graph.edge_geom,
+                self.type_emb(graph.edge_types),
+            ],
+            dim=1,
+        ).to(graph.nodes.dtype)
+        hidden = self.recv_proj(graph.nodes)[recv] + self.send_proj(graph.nodes)[send] + self.edge_proj(edge_feats)
+        scores = self.out(hidden).squeeze(-1).float()
 
-        h_i = nodes[src]                                  # [E, 64]
-        h_j = nodes[tgt]                                  # [E, 64]
-        k_val = kij.unsqueeze(1)                          # [E, 1]
-        ua_i = ua[src].unsqueeze(1)                       # [E, 1]
-        ue_i = ue[src].unsqueeze(1)                       # [E, 1]
-        ua_j = ua[tgt].unsqueeze(1)                       # [E, 1]
-        ue_j = ue[tgt].unsqueeze(1)                       # [E, 1]
-        geom = deltas                                     # [E, 3]
-        e_emb = self.edge_type_emb(edge_types)            # [E, 4]
+        budget = self.budgets[graph.edge_types]
+        if self.use_uncertainty and self.k_gain > 0:
+            budget = budget + torch.round(self.k_gain * torch.maximum(ua, ue)[recv]).long()
+        selected = topk_per_group(scores.detach(), recv * NUM_EDGE_TYPES + graph.edge_types, budget)
 
-        x_140 = torch.cat([h_i, h_j, k_val, ua_i, ue_i, ua_j, ue_j, geom, e_emb], dim=-1)
-        return x_140
+        prob = torch.sigmoid(scores)
+        mask = selected.float() + prob - prob.detach()
+        return Routing(scores=scores, mask=mask, selected=selected)
 
-    def straight_through_topk(
-        self,
-        s_ij: torch.Tensor,
-        edge_index: torch.Tensor,
-        edge_types: torch.Tensor,
-        num_nodes: int
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Performs deterministic per-type Top-K selection and preserves ST surrogate gradients."""
-        device = s_ij.device
-        src = edge_index[0]
-        m_hard = torch.zeros_like(s_ij)
 
-        # Per edge type Top-K selection
-        for e_type, k_val in self.k_budgets.items():
-            type_mask = (edge_types == e_type)
-            if not type_mask.any() or k_val <= 0:
-                continue
+@torch.no_grad()
+def topk_per_group(scores: torch.Tensor, group: torch.Tensor, budget: torch.Tensor) -> torch.Tensor:
+    """Boolean mask of the `budget[e]` highest-scoring edges within each group."""
+    num = scores.numel()
+    if num == 0:
+        return torch.zeros_like(scores, dtype=torch.bool)
+    score_rank = torch.empty(num, dtype=torch.long, device=scores.device)
+    score_rank[torch.argsort(scores, descending=True)] = torch.arange(num, device=scores.device)
+    order = torch.argsort(group * num + score_rank)
 
-            type_indices = torch.nonzero(type_mask).squeeze(1)
-            type_src = src[type_indices]
-            type_scores = s_ij[type_indices]
+    sorted_group = group[order]
+    counts = torch.bincount(sorted_group)
+    starts = counts.cumsum(0) - counts
+    rank = torch.arange(num, device=scores.device) - starts[sorted_group]
 
-            # Unique source nodes for this type
-            for u_src in torch.unique(type_src):
-                node_edge_mask = (type_src == u_src)
-                candidate_sub_indices = type_indices[node_edge_mask]
-                sub_scores = type_scores[node_edge_mask]
-
-                k = min(k_val, sub_scores.size(0))
-                if k > 0:
-                    _, top_sub_idx = torch.topk(sub_scores, k=k, largest=True)
-                    m_hard[candidate_sub_indices[top_sub_idx]] = 1.0
-
-        # Straight-Through Estimator:
-        # Forward pass is binary m_hard; backward pass flows through sigmoid(s_ij)
-        prob_s = torch.sigmoid(s_ij)
-        m_st = m_hard + (prob_s - prob_s.detach())
-        return m_st, m_hard
-
-    def forward(
-        self,
-        graph_dict: Dict[str, Any],
-        ua_flat: torch.Tensor,
-        ue_flat: torch.Tensor
-    ) -> Dict[str, torch.Tensor]:
-        """Routes candidate graph edges and produces Straight-Through mask tensor."""
-        nodes = graph_dict["nodes"]
-        edge_index = graph_dict["edge_index"]
-        kij = graph_dict["kij"]
-        deltas = graph_dict["edge_deltas"]
-        edge_types = graph_dict["edge_types"]
-
-        x_140 = self.assemble_input_vector(nodes, edge_index, kij, deltas, edge_types, ua_flat, ue_flat)
-        s_ij = self.router_mlp(x_140).squeeze(-1)  # [E]
-
-        m_st, m_hard = self.straight_through_topk(s_ij, edge_index, edge_types, nodes.shape[0])
-
-        return {
-            "s_ij": s_ij,
-            "m_st": m_st,
-            "m_hard": m_hard,
-            "edge_index": edge_index,
-        }
-
+    selected = torch.zeros(num, dtype=torch.bool, device=scores.device)
+    selected[order] = rank < budget[order]
+    return selected

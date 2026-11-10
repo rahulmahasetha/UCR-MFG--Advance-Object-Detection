@@ -6,7 +6,8 @@ import torch.nn.functional as F
 
 
 class FCOSHead(nn.Module):
-    """Downstream anchor-free FCOS detection head with decoupled Cls, Reg, Centerness towers."""
+    """Probabilistic anchor-free FCOS head: class logits, stride-normalised ltrb distances, centerness
+    and a per-side box log-variance for the aleatoric localisation uncertainty of each detection."""
 
     def __init__(
         self,
@@ -20,66 +21,34 @@ class FCOSHead(nn.Module):
         self.strides = strides
         self.center_radius = center_sampling_radius
         self.scale_limits = [[0, 64], [64, 128], [128, float("inf")]]
-
-        # Classification tower (4 convs)
-        cls_layers = []
-        for _ in range(4):
-            cls_layers.append(nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1))
-            cls_layers.append(nn.GroupNorm(32, in_channels))
-            cls_layers.append(nn.SiLU())
-        self.cls_tower = nn.Sequential(*cls_layers)
-
-        # Regression tower (4 convs)
-        reg_layers = []
-        for _ in range(4):
-            reg_layers.append(nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1))
-            reg_layers.append(nn.GroupNorm(32, in_channels))
-            reg_layers.append(nn.SiLU())
-        self.reg_tower = nn.Sequential(*reg_layers)
-
-        # Prediction heads
+        self.cls_tower = self._tower(in_channels)
+        self.reg_tower = self._tower(in_channels)
         self.cls_pred = nn.Conv2d(in_channels, num_classes, kernel_size=3, padding=1)
         self.reg_pred = nn.Conv2d(in_channels, 4, kernel_size=3, padding=1)
+        self.var_pred = nn.Conv2d(in_channels, 4, kernel_size=3, padding=1)
         self.cen_pred = nn.Conv2d(in_channels, 1, kernel_size=3, padding=1)
-
-        # Scale multipliers per FPN level for regression
         self.scales = nn.ModuleList([ScaleModule(init_value=1.0) for _ in strides])
+        nn.init.constant_(self.cls_pred.bias, -math.log((1 - 0.01) / 0.01))
+        nn.init.zeros_(self.var_pred.weight)
+        nn.init.zeros_(self.var_pred.bias)
 
-        # Prior bias initialization for classification (-4.6 => p ~ 0.01)
-        prior_prob = 0.01
-        bias_init = float(-math.log((1 - prior_prob) / prior_prob))
-        nn.init.constant_(self.cls_pred.bias, bias_init)
+    @staticmethod
+    def _tower(channels: int) -> nn.Sequential:
+        layers = []
+        for _ in range(4):
+            layers += [nn.Conv2d(channels, channels, kernel_size=3, padding=1), nn.GroupNorm(32, channels), nn.SiLU()]
+        return nn.Sequential(*layers)
 
-    def forward(
-        self,
-        features: List[torch.Tensor]
-    ) -> Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]:
-        """Forward pass over feature pyramid [Z1, Z2, Z3].
-        
-        Returns:
-            cls_preds: List of [B, C, H_k, W_k] logits
-            reg_preds: List of [B, 4, H_k, W_k] stride-normalized distances
-            cen_preds: List of [B, 1, H_k, W_k] centerness logits
-        """
-        cls_preds, reg_preds, cen_preds = [], [], []
-
+    def forward(self, features: List[torch.Tensor]) -> Dict[str, List[torch.Tensor]]:
+        out = {"cls": [], "reg": [], "cen": [], "log_var": []}
         for lvl, feat in enumerate(features):
             cls_feat = self.cls_tower(feat)
             reg_feat = self.reg_tower(feat)
-
-            cls_logits = self.cls_pred(cls_feat)
-            cen_logits = self.cen_pred(cls_feat)
-
-            # Stride-normalized positive regression predictions
-            raw_reg = self.reg_pred(reg_feat)
-            scaled_reg = self.scales[lvl](raw_reg)
-            reg_dist = torch.exp(scaled_reg.clamp(-10.0, 10.0))
-
-            cls_preds.append(cls_logits)
-            reg_preds.append(reg_dist)
-            cen_preds.append(cen_logits)
-
-        return cls_preds, reg_preds, cen_preds
+            out["cls"].append(self.cls_pred(cls_feat))
+            out["cen"].append(self.cen_pred(cls_feat))
+            out["reg"].append(torch.exp(self.scales[lvl](self.reg_pred(reg_feat)).clamp(-10.0, 10.0)))
+            out["log_var"].append(self.var_pred(reg_feat).clamp(-10.0, 10.0))
+        return out
 
     @torch.no_grad()
     def get_grid_locations(

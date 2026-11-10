@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.losses.uncertainty_loss import gaussian_nll
+
 
 def focal_loss(
     logits: torch.Tensor,
@@ -86,7 +88,8 @@ def ciou_loss(
 
 
 class FCOSDetectionLoss(nn.Module):
-    """Unified FCOS Detection Loss: Focal Classification + CIoU Regression + BCE Centerness."""
+    """FCOS detection loss (focal + centerness-weighted CIoU + centerness BCE) and the box-variance NLL
+    of the probabilistic head, reported separately as `loss_var`."""
 
     def __init__(self, strides: List[int] = [8, 16, 32]):
         super().__init__()
@@ -94,72 +97,50 @@ class FCOSDetectionLoss(nn.Module):
 
     def forward(
         self,
-        cls_preds: List[torch.Tensor],
-        reg_preds: List[torch.Tensor],
-        cen_preds: List[torch.Tensor],
+        head: Dict[str, List[torch.Tensor]],
         cls_targets: List[torch.Tensor],
         reg_targets: List[torch.Tensor],
         cen_targets: List[torch.Tensor],
         pos_masks: List[torch.Tensor],
-        locations: List[torch.Tensor]
+        locations: List[torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
-        device = cls_preds[0].device
-        total_pos = sum([pos.sum().item() for pos in pos_masks])
-        num_pos = max(float(total_pos), 1.0)
-
-        loss_cls_list, loss_box_list, loss_cen_list = [], [], []
+        device = head["cls"][0].device
+        num_pos = max(float(sum(p.sum() for p in pos_masks)), 1.0)
+        loss_cls = torch.zeros((), device=device)
+        loss_box = torch.zeros((), device=device)
+        loss_cen = torch.zeros((), device=device)
+        loss_var = torch.zeros((), device=device)
 
         for lvl, stride in enumerate(self.strides):
-            pred_cls = cls_preds[lvl].permute(0, 2, 3, 1).reshape(-1, cls_preds[lvl].shape[1])
-            pred_reg = reg_preds[lvl].permute(0, 2, 3, 1).reshape(-1, 4)
-            pred_cen = cen_preds[lvl].permute(0, 2, 3, 1).reshape(-1)
+            batch_size, num_classes = head["cls"][lvl].shape[:2]
+            pred_cls = head["cls"][lvl].permute(0, 2, 3, 1).reshape(-1, num_classes).float()
+            loss_cls = loss_cls + focal_loss(pred_cls, cls_targets[lvl].reshape(-1))
 
-            t_cls = cls_targets[lvl].reshape(-1)
-            t_reg = reg_targets[lvl].reshape(-1, 4)
-            t_cen = cen_targets[lvl].reshape(-1)
-            is_pos = pos_masks[lvl].reshape(-1)
+            pos = pos_masks[lvl].reshape(-1)
+            if not pos.any():
+                continue
+            pred_reg = head["reg"][lvl].permute(0, 2, 3, 1).reshape(-1, 4)[pos].float()
+            pred_var = head["log_var"][lvl].permute(0, 2, 3, 1).reshape(-1, 4)[pos]
+            pred_cen = head["cen"][lvl].permute(0, 2, 3, 1).reshape(-1)[pos].float()
+            t_reg = reg_targets[lvl].reshape(-1, 4)[pos]
+            t_cen = cen_targets[lvl].reshape(-1)[pos]
 
-            # 1. Focal loss
-            loss_cls_list.append(focal_loss(pred_cls, t_cls))
+            loc = locations[lvl].repeat(batch_size, 1)[pos]
+            ciou = ciou_loss(_decode(loc, pred_reg, stride), _decode(loc, t_reg, stride))
+            loss_box = loss_box + (ciou * t_cen).sum()
+            loss_cen = loss_cen + F.binary_cross_entropy_with_logits(pred_cen, t_cen, reduction="sum")
+            loss_var = loss_var + gaussian_nll(pred_var, pred_reg, t_reg)
 
-            # 2. CIoU & Centerness on positive locations
-            if is_pos.any():
-                pos_pred_reg = pred_reg[is_pos]
-                pos_t_reg = t_reg[is_pos]
-                pos_t_cen = t_cen[is_pos]
-                pos_pred_cen = pred_cen[is_pos]
-
-                # Decode boxes from normalized targets
-                loc_repeated = locations[lvl].repeat(cls_preds[lvl].shape[0], 1)[is_pos]
-                pred_x1 = loc_repeated[:, 0] - pos_pred_reg[:, 0] * stride
-                pred_y1 = loc_repeated[:, 1] - pos_pred_reg[:, 1] * stride
-                pred_x2 = loc_repeated[:, 0] + pos_pred_reg[:, 2] * stride
-                pred_y2 = loc_repeated[:, 1] + pos_pred_reg[:, 3] * stride
-                decoded_preds = torch.stack([pred_x1, pred_y1, pred_x2, pred_y2], dim=-1)
-
-                tgt_x1 = loc_repeated[:, 0] - pos_t_reg[:, 0] * stride
-                tgt_y1 = loc_repeated[:, 1] - pos_t_reg[:, 1] * stride
-                tgt_x2 = loc_repeated[:, 0] + pos_t_reg[:, 2] * stride
-                tgt_y2 = loc_repeated[:, 1] + pos_t_reg[:, 3] * stride
-                decoded_targets = torch.stack([tgt_x1, tgt_y1, tgt_x2, tgt_y2], dim=-1)
-
-                ciou_raw = ciou_loss(decoded_preds, decoded_targets)
-                loss_box = (ciou_raw * pos_t_cen).sum() / (pos_t_cen.sum() + 1e-7)
-                loss_box_list.append(loss_box * pos_t_cen.sum())
-
-                loss_cen = F.binary_cross_entropy_with_logits(pos_pred_cen, pos_t_cen, reduction="sum")
-                loss_cen_list.append(loss_cen)
-
-        total_cls_loss = sum(loss_cls_list) / num_pos
-        total_box_loss = sum(loss_box_list) / num_pos if loss_box_list else torch.tensor(0.0, device=device)
-        total_cen_loss = sum(loss_cen_list) / num_pos if loss_cen_list else torch.tensor(0.0, device=device)
-
-        l_det = total_cls_loss + total_box_loss + total_cen_loss
-
+        loss_cls, loss_box, loss_cen, loss_var = (x / num_pos for x in (loss_cls, loss_box, loss_cen, loss_var))
         return {
-            "loss_det": l_det,
-            "loss_cls": total_cls_loss,
-            "loss_box": total_box_loss,
-            "loss_cen": total_cen_loss,
+            "loss_det": loss_cls + loss_box + loss_cen,
+            "loss_cls": loss_cls,
+            "loss_box": loss_box,
+            "loss_cen": loss_cen,
+            "loss_var": loss_var,
         }
 
+
+def _decode(loc: torch.Tensor, ltrb: torch.Tensor, stride: int) -> torch.Tensor:
+    ltrb = ltrb * stride
+    return torch.cat([loc - ltrb[:, :2], loc + ltrb[:, 2:]], dim=1)

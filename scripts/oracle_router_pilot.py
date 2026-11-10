@@ -1,62 +1,70 @@
 import os
 import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-import argparse
-import yaml
-import torch
-from torch.utils.data import DataLoader
 
-from src.data.visdrone import VisDroneDataset
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import argparse
+
+import torch
+import yaml
+from torch.utils.data import DataLoader, Subset
+
 from src.data.collate import collate_fn
+from src.data.visdrone import VisDroneDataset
+from src.losses.router_loss import same_instance_edges
+from src.models.graph_ops import NUM_EDGE_TYPES
+from src.models.uncertainty_head import mc_generator
 from src.models.ucr_mfg import UCRMFG
+
+EDGE_NAMES = ("local", "knn", "top-down", "bottom-up")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Privileged Diagnostic Oracle Router Pilot")
-    parser.add_argument("--config", type=str, default="configs/experiments/visdrone_primary.yaml")
+    parser = argparse.ArgumentParser(description="Router diagnostic against a GT same-object oracle")
+    parser.add_argument("--config", default="configs/experiments/visdrone_primary.yaml")
+    parser.add_argument("--weights", default=None, help="Trained checkpoint; without it the router is untrained")
     parser.add_argument("--samples", type=int, default=20)
     args = parser.parse_args()
 
-    print("\n=======================================================")
-    print("🔬 [ORACLE PILOT] Running Privileged Diagnostic Oracle Router")
-    print("   Evaluating upper-bound routing quality with GT instances")
-    print("=======================================================\n")
-
-    with open(args.config, "r") as f:
+    with open(args.config) as f:
         exp_cfg = yaml.safe_load(f)
-    with open(exp_cfg["dataset_config"], "r") as f:
+    with open(exp_cfg["dataset_config"]) as f:
         ds_cfg = yaml.safe_load(f)
+    with open(exp_cfg["model_config"]) as f:
+        model_cfg = yaml.safe_load(f)
 
     device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
-    dataset = VisDroneDataset(root_dir=ds_cfg["root_dir"], split="val", img_size=tuple(ds_cfg["image_size"]))
-    dataset.samples = dataset.samples[:args.samples]
-    loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_fn)
-
-    model = UCRMFG(num_classes=10, pretrained=False).to(device)
+    model = UCRMFG.from_config(model_cfg, ds_cfg["classes"]["num_classes"]).to(device)
+    if args.weights:
+        model.load_state_dict(torch.load(args.weights, map_location="cpu", weights_only=False)["model_state_dict"])
+    model.set_curriculum_stage(4)
     model.eval()
 
-    total_candidate_edges = 0
-    total_oracle_gt_edges = 0
+    dataset = VisDroneDataset(ds_cfg["root_dir"], "val", tuple(ds_cfg["image_size"]))
+    loader = DataLoader(Subset(dataset, range(min(args.samples, len(dataset)))), batch_size=1, collate_fn=collate_fn)
 
+    stats = torch.zeros(NUM_EDGE_TYPES, 5, dtype=torch.long)
     with torch.no_grad():
-        for batch in loader:
-            images = batch["images"].to(device)
-            boxes = batch["boxes"][0].to(device)
+        for i, batch in enumerate(loader):
+            outputs = model(batch["images"].to(device), generator=mc_generator(0, 0, i, device))
+            graph, routing = outputs["graph"], outputs["routing"]
+            relevant = same_instance_edges(graph, batch["boxes"])
+            for t in range(NUM_EDGE_TYPES):
+                of_type = graph.edge_types == t
+                sel = routing.selected & of_type
+                n_rel, n_sel = int((relevant & of_type).sum()), int(sel.sum())
+                stats[t] += torch.tensor([int(of_type.sum()), n_rel, n_sel, int((relevant & sel).sum()), min(n_rel, n_sel)])
 
-            outputs = model(images)
-            g_data = outputs["graph_data"][0]
-            edge_index = g_data["edge_index"]
-            total_candidate_edges += edge_index.shape[1]
+    print(f"\nRouter vs. same-object oracle on {len(loader)} VisDrone val images ({'trained' if args.weights else 'UNTRAINED'} router)")
+    print(f"{'edge type':<10} {'candidates':>11} {'base rate':>10} {'router prec':>12} {'oracle prec':>12} {'router recall':>14}")
+    def ratio(a: int, b: int) -> float:
+        return a / b if b else float("nan")
 
-            # Count edges connecting nodes inside the same GT box
-            if boxes.numel() > 0:
-                total_oracle_gt_edges += int(edge_index.shape[1] * 0.15)  # Diagnostic statistic
-
-    print(f"Total candidate edges analyzed: {total_candidate_edges}")
-    print(f"Diagnostic Oracle upper-bound ratio: {total_oracle_gt_edges / max(total_candidate_edges, 1):.4f}")
-    print("✅ Oracle diagnostic pilot execution completed successfully.\n")
+    for t, name in enumerate(EDGE_NAMES):
+        cand, rel, sel, rel_sel, oracle = stats[t].tolist()
+        print(f"{name:<10} {cand:>11} {ratio(rel, cand):>10.4f} {ratio(rel_sel, sel):>12.4f} {ratio(oracle, sel):>12.4f} {ratio(rel_sel, rel):>14.4f}")
+    print("Oracle precision is the best achievable with the same number of selected edges per image.\n")
 
 
 if __name__ == "__main__":
     main()
-

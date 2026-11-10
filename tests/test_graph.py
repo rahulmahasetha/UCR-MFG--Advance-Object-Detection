@@ -1,26 +1,46 @@
 import torch
-import pytest
+
 from src.models.graph_builder import MultiScaleGraphBuilder
+from src.models.graph_ops import BOTTOM_UP, KNN, LOCAL, TOP_DOWN, flatten_levels, to_pyramid
 
 
-def test_graph_builder_construction():
-    builder = MultiScaleGraphBuilder(in_channels=256, graph_dim=64, r_local=2, k_feat=4, f1_block_size=8)
-    f1 = torch.randn(1, 256, 8, 8)
-    f2 = torch.randn(1, 256, 4, 4)
-    f3 = torch.randn(1, 256, 2, 2)
+def make_features(batch=2):
+    return [torch.randn(batch, 256, 8, 8), torch.randn(batch, 256, 4, 4), torch.randn(batch, 256, 2, 2)]
 
-    graphs = builder((f1, f2, f3))
-    assert len(graphs) == 1
-    g0 = graphs[0]
 
-    # Total nodes = 8*8 + 4*4 + 2*2 = 64 + 16 + 4 = 84
-    assert g0["nodes"].shape == (84, 64)
-    assert g0["edge_index"].shape[0] == 2
-    assert g0["edge_index"].shape[1] > 0
-    assert g0["kij"].shape[0] == g0["edge_index"].shape[1]
-    assert g0["wij"].shape[0] == g0["edge_index"].shape[1]
+def test_graph_structure_and_weights():
+    builder = MultiScaleGraphBuilder(256, 64, (8, 16, 32), r_local=1, k_feat=4, block_size=4)
+    graph = builder(make_features())
+    n = 64 + 16 + 4
 
-    # Weights in [0, 1]
-    assert g0["kij"].min() >= 0.0 and g0["kij"].max() <= 1.0
-    assert g0["wij"].min() >= 0.0 and g0["wij"].max() <= 1.0
+    assert graph.nodes.shape == (2 * n, 64)
+    assert graph.num_nodes == n
+    assert graph.edge_index.max() < 2 * n
+    assert graph.edge_geom.shape == (graph.edge_index.shape[1], 3)
+    assert 0 <= graph.kij.min() and graph.kij.max() <= 1
+    assert set(graph.edge_types.unique().tolist()) == {LOCAL, KNN, TOP_DOWN, BOTTOM_UP}
 
+    recv, send = graph.edge_index
+    assert ((recv // n) == (send // n)).all(), "edges must stay inside one image"
+    keys = recv * 2 * n + send
+    assert keys.unique().numel() == keys.numel(), "candidate edges must be unique"
+
+    knn = graph.edge_types == KNN
+    assert (graph.edge_geom[knn, 2] > 0).all(), "kNN edges carry geometry"
+
+
+def test_every_fine_node_has_a_parent():
+    builder = MultiScaleGraphBuilder(256, 64, (8, 16, 32), r_local=1, k_feat=2, block_size=4)
+    graph = builder(make_features(batch=1))
+    top_down = graph.edge_types == TOP_DOWN
+    receivers = graph.edge_index[0, top_down].unique()
+    assert receivers.numel() == 64 + 16
+    parents = graph.edge_index[0, graph.edge_types == BOTTOM_UP]
+    assert torch.bincount(parents).max() == 4
+
+
+def test_pyramid_round_trip():
+    feats = make_features()
+    flat = flatten_levels(feats)
+    back = to_pyramid(flat, 2, [tuple(f.shape[-2:]) for f in feats])
+    assert all(torch.equal(a, b) for a, b in zip(feats, back))

@@ -1,89 +1,51 @@
-from typing import List, Tuple, Dict, Any
+from typing import List
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
 class ObjectCentricConsistencyLoss(nn.Module):
-    """Object-Centric Cross-Scale Prediction-Space KL Consistency Loss.
-    
-    Computes KL divergence between parent and child scales for ground-truth matched object centers.
-    Implements minimal-area collision resolution and NaN-safe zero-pair autograd attachment.
+    """Cross-scale class-distribution KL at GT object centers between adjacent pyramid levels.
+
+    When several objects share a fine-level cell the smallest one is used; the coarse level is the
+    detached teacher. Returns an autograd-attached zero when no object is present.
     """
 
     def __init__(self, strides: List[int] = [8, 16, 32]):
         super().__init__()
         self.strides = strides
 
-    def forward(
-        self,
-        cls_preds: List[torch.Tensor],
-        gt_boxes_batch: List[torch.Tensor]
-    ) -> torch.Tensor:
-        device = cls_preds[0].device
-        batch_size = cls_preds[0].shape[0]
-        kl_losses = []
-
-        # Compare scale k with scale k+1: (F1, F2) and (F2, F3)
+    def forward(self, cls_preds: List[torch.Tensor], gt_boxes_batch: List[torch.Tensor]) -> torch.Tensor:
+        losses = []
         for lvl in range(len(self.strides) - 1):
-            s_k = self.strides[lvl]
-            s_k1 = self.strides[lvl + 1]
-
-            pred_k = cls_preds[lvl]    # [B, C, H_k, W_k]
-            pred_k1 = cls_preds[lvl + 1]  # [B, C, H_k1, W_k1]
-            c_dim = pred_k.shape[1]
-
-            for b in range(batch_size):
-                boxes = gt_boxes_batch[b].to(device)
+            child_map, parent_map = cls_preds[lvl], cls_preds[lvl + 1]
+            for b, boxes in enumerate(gt_boxes_batch):
                 if boxes.numel() == 0:
                     continue
+                boxes = boxes.to(child_map.device)
+                center = (boxes[:, :2] + boxes[:, 2:]) / 2
+                area = (boxes[:, 2:] - boxes[:, :2]).prod(-1)
+                cx, cy = self._cells(center, self.strides[lvl], child_map)
+                px, py = self._cells(center, self.strides[lvl + 1], parent_map)
 
-                # Ground-truth object centers
-                gx = (boxes[:, 0] + boxes[:, 2]) / 2.0
-                gy = (boxes[:, 1] + boxes[:, 3]) / 2.0
-                areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+                keys = cy * child_map.shape[3] + cx
+                order = torch.argsort(area)
+                unique, inverse = torch.unique(keys[order], return_inverse=True)
+                first = torch.full((unique.numel(),), order.numel(), device=keys.device, dtype=torch.long)
+                first.scatter_reduce_(0, inverse, torch.arange(order.numel(), device=keys.device), reduce="amin")
+                pick = order[first]
 
-                # Projected grid locations
-                xk = (gx / s_k).long().clamp(0, pred_k.shape[3] - 1)
-                yk = (gy / s_k).long().clamp(0, pred_k.shape[2] - 1)
-                xk1 = (gx / s_k1).long().clamp(0, pred_k1.shape[3] - 1)
-                yk1 = (gy / s_k1).long().clamp(0, pred_k1.shape[2] - 1)
+                child = child_map[b, :, cy[pick], cx[pick]].T.float()
+                parent = parent_map[b, :, py[pick], px[pick]].T.float().detach()
+                losses.append(F.kl_div(F.log_softmax(child, -1), F.softmax(parent, -1), reduction="batchmean"))
 
-                # Minimal-area collision resolution for level k
-                keys_k = (yk * pred_k.shape[3] + xk).long()
-                unique_keys, inv_idx = torch.unique(keys_k, return_inverse=True)
+        if not losses:
+            return sum(p.sum() for p in cls_preds) * 0.0
+        return sum(losses) / len(losses)
 
-                matched_pairs = []
-                for u_idx in range(unique_keys.size(0)):
-                    matching_gt = torch.nonzero(inv_idx == u_idx).squeeze(1)
-                    if matching_gt.numel() == 1:
-                        best_gt = matching_gt[0]
-                    else:
-                        best_gt = matching_gt[areas[matching_gt].argmin()]
-
-                    matched_pairs.append((
-                        (yk[best_gt], xk[best_gt]),
-                        (yk1[best_gt], xk1[best_gt])
-                    ))
-
-                if not matched_pairs:
-                    continue
-
-                # Extract logits at matched locations
-                logits_child = torch.stack([pred_k[b, :, y_c, x_c] for (y_c, x_c), _ in matched_pairs], dim=0)
-                logits_parent = torch.stack([pred_k1[b, :, y_p, x_p] for _, (y_p, x_p) in matched_pairs], dim=0)
-
-                log_p_child = F.log_softmax(logits_child, dim=-1)
-                p_parent = F.softmax(logits_parent.detach(), dim=-1)  # Stop grad into parent
-
-                # KL divergence: D_KL(child || parent)
-                kl = F.kl_div(log_p_child, p_parent, reduction="batchmean")
-                kl_losses.append(kl)
-
-        # NaN-safe empty set handling: Attach 0.0 * tensor sum to maintain autograd
-        if not kl_losses:
-            zero_grad = 0.0 * sum([p.sum() for p in cls_preds])
-            return zero_grad
-
-        return sum(kl_losses) / len(kl_losses)
-
+    @staticmethod
+    def _cells(center: torch.Tensor, stride: int, fmap: torch.Tensor):
+        x = (center[:, 0] / stride).long().clamp(0, fmap.shape[3] - 1)
+        y = (center[:, 1] / stride).long().clamp(0, fmap.shape[2] - 1)
+        return x, y
