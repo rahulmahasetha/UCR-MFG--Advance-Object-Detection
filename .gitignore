@@ -19,6 +19,8 @@ env/
 # Source data code must NOT be ignored
 !src/data/
 !src/data/**
+src/data/**/__pycache__/
+src/data/**/__pycache__/**
 
 # Precomputed Caches
 .cache/
