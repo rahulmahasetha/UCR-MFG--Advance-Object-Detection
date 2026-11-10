@@ -25,7 +25,127 @@ UCR-MFG addresses high visual ambiguity, extreme scale variation, and dense obje
 
 ---
 
-## 2. Dataset Strategy & Operational Roles
+## 2. Working Architecture & Dataflow Diagrams
+
+### Diagram 1: Full System Forward Pass & Module Interactions
+```mermaid
+flowchart TD
+    subgraph INPUT["Input Pipeline"]
+        IMG["Input Aerial Image\n[B x 3 x H x W]"]
+    end
+
+    subgraph BACKBONE["Multi-Scale Feature Extractor"]
+        BB["ResNet-50 + FPN Backbone\n(Strides 8, 16, 32; Channels C = 256)"]
+        F1["F1 (stride 8): B x 256 x H/8 x W/8\n[Small Objects / Fine Scale]"]
+        F2["F2 (stride 16): B x 256 x H/16 x W/16\n[Medium Objects]"]
+        F3["F3 (stride 32): B x 256 x H/32 x W/32\n[Large Objects / Context]"]
+    end
+
+    subgraph C1["Contribution 1: Decoupled Uncertainty Estimation"]
+        UH["Pre-Graph Uncertainty Head\n(2-Conv Shared Tower: GN + SiLU)"]
+        UA["Ua: Aleatoric Uncertainty ∈ [0, 1]\nNorm Entropy + c_pre · Var / (σ0² + Var)"]
+        UE["Ue: Epistemic Uncertainty ∈ [0, 1]\nMonte Carlo Inverted Dropout (T=10)\nMutual Information: I(y; W | x)"]
+    end
+
+    subgraph GRAPH_BUILD["Multi-Scale Fuzzy Graph Construction"]
+        PROJ["Linear Projection & LayerNorm\n(256-d → 64-d)"]
+        GB["Candidate Graph Builder\n• Spatial Block Partitioning (16x16)\n• Local Spatial Window (r=3)\n• Heavy-tailed Student-t kNN (ν=1)\n• Cross-Scale Top-Down & Bottom-Up"]
+        CAND["Candidate Graph G = (V, E, W)\n(Nodes in 64-d, Unnormalized kij)"]
+    end
+
+    subgraph C2["Contribution 2: Relational Routing"]
+        DESC["140-d Edge Feature Descriptor\n[hi, hj, kij, Ua_i, Ue_i, Ua_j, Ue_j, Δx, Δy, ||Δx||, type]"]
+        ROUTER["UCRouter MLP (gθ)\nEdge Logits sij"]
+        TOPK["Straight-Through Top-K Mask mij\n• Adaptive Budget: K(Ue)\n• Forward: Hard Binary {0, 1}\n• Backward: Surrogate Sigmoid σ(sij)"]
+    end
+
+    subgraph C3["Contribution 3: Benefit-Aware Message Passing"]
+        MPNN["BenefitAwareMPNN (in 64-d space)\n• Masked Edge Attention (· mij)\n• Benefit Gate: g_ij = σ(f(hi, vj, sij, U))\n• GRU Temporal Node State Update"]
+        EXP["Linear Expansion & Residual\n(64-d → 256-d) + Visual Features Fi"]
+        HFEAT["Graph-Enhanced Features\n[H1, H2, H3] ∈ R^(B x 256 x Hk x Wk)"]
+    end
+
+    subgraph C4["Contribution 4: Uncertainty Feature Fusion"]
+        GATE["Uncertainty-Aware Fusion Gate (fφ)\nChannel-wise λi = σ(Linear514→256([Fi || Hi || Ua || Ue]))"]
+        FUSED["Fused Features Zi\nZi = λi ⊙ Fi + (1 - λi) ⊙ Hi"]
+    end
+
+    subgraph DET["Detection & Uncertainty Output"]
+        HEAD["Probabilistic FCOS Detection Head\n• Decoupled Cls Tower (Focal Loss)\n• Box Reg Tower (CIoU + Log-Normal Var)\n• Centerness Tower (BCE Loss)"]
+        POST["Post-Processing (Batched NMS)\n• Bounding Boxes & Object Classes\n• Per-detection Box Standard Deviation (px)\n• Calibrated Aleatoric (Ua) & Epistemic (Ue)\n• Expected Calibration Error (D-ECE)"]
+    end
+
+    %% Edge connections
+    IMG --> BB
+    BB --> F1 & F2 & F3
+
+    F1 & F2 & F3 --> UH
+    UH --> UA & UE
+
+    F1 & F2 & F3 --> PROJ
+    PROJ --> GB
+    UA & UE -.->|Uncertainty Conditioning| GB
+    GB --> CAND
+
+    CAND --> DESC
+    UA & UE -.->|Node Uncertainties| DESC
+    DESC --> ROUTER
+    ROUTER --> TOPK
+
+    CAND --> MPNN
+    TOPK -->|Gated Sparse Edges| MPNN
+    MPNN --> EXP
+    EXP --> HFEAT
+
+    F1 & F2 & F3 --> GATE
+    HFEAT --> GATE
+    UA & UE -.->|Confidence Weights| GATE
+    GATE --> FUSED
+
+    FUSED --> HEAD
+    HEAD --> POST
+```
+
+### Diagram 2: Straight-Through Top-K Routing & Benefit Distillation Flow
+```mermaid
+flowchart LR
+    subgraph FORWARD["Forward Pass (Discrete Top-K Selection)"]
+        direction TB
+        E_IN["140-d Edge Tensor e_ij"] --> MLP["Router MLP gθ"]
+        MLP --> S_LOGIT["Edge Logit s_ij"]
+        S_LOGIT --> TOPK_OP["Top-K Operator (Budget K)"]
+        TOPK_OP --> HARD_M["Hard Binary Mask m_ij ∈ {0, 1}"]
+        HARD_M --> MP_AGG["Message Aggregation:\nm_ij · α_ij · g_ij · W_v h_j"]
+        MP_AGG --> GRU_NODE["GRU Node Update (64-d)"]
+    end
+
+    subgraph BACKWARD["Backward Pass (Surrogate Gradient & Distillation)"]
+        direction BT
+        L_DET["Detection Loss L_det"] -.->|"∂L / ∂h"| GRU_NODE
+        GRU_NODE -.->|"∂L / ∂m"| MP_AGG
+        MP_AGG -.->|"Straight-Through: ∂m_ij / ∂s_ij ≈ σ'(s_ij)"| S_LOGIT
+        S_LOGIT -.->|"Non-Zero Router Gradients"| MLP
+        L_DET -.->|"Every M_benefit Steps:\nb_ij = -∂L_det / ∂m_ij"| DISTILL["Benefit Distillation Loss (L_benefit)"]
+        DISTILL -.->|"Supervises Router"| MLP
+    end
+```
+
+### Diagram 3: 4-Stage Progressive Curriculum & Loss Schedule
+```mermaid
+flowchart TD
+    S1["Stage 1: Base Detector & Uncertainty (Epochs 1–30)\n• Train: ResNet-50 + FPN, PreGraphUncertaintyHead, DetectionHead\n• Bypassed: Graph construction & routing\n• Objective: L_det + λ_u · L_u"]
+    S2["Stage 2: Fuzzy Graph Regularization (Epochs 31–60)\n• Activate: MultiScaleGraphBuilder\n• Objective: L_det + λ_u · L_u + λ_g · L_graph (Dirichlet Laplacian)"]
+    S3["Stage 3: Relational Routing & Message Passing (Epochs 61–90)\n• Activate: UCRouter & BenefitAwareMPNN\n• Fusion: Fixed residual (F + 0.1 H) to provide detection gradients\n• Objective: Stage 2 + λ_inst · L_inst + λ_benefit · L_benefit"]
+    S4["Stage 4: Full End-to-End System (Epochs 91–150)\n• Activate: UncertaintyFusionGate (Channel-wise λi)\n• Objective: Stage 3 + λ_consistency · L_consistency\n• Scheduler: Cosine Annealing to 1e-6"]
+
+    S1 -->|Epoch 31| S2
+    S2 -->|Epoch 61| S3
+    S3 -->|Epoch 91| S4
+```
+
+---
+
+## 3. Dataset Strategy & Operational Roles
 
 | Dataset | Role | Priority | Annotation Format | Ground-Truth Splits on Disk | Operational Purpose |
 |---|---|---|---|---|---|
@@ -39,7 +159,7 @@ UCR-MFG addresses high visual ambiguity, extreme scale variation, and dense obje
 
 ---
 
-## 3. Dataset Download Links & Folder Setup
+## 4. Dataset Download Links & Folder Setup
 
 Place datasets in the `dataset/` root directory following this exact structure:
 
@@ -82,7 +202,7 @@ dataset/
 
 ---
 
-## 4. Environment Setup
+## 5. Environment Setup
 
 ### Using `uv` (Recommended — 2-second setup):
 ```bash
@@ -103,7 +223,7 @@ pip install -r requirements.txt
 
 ---
 
-## 5. Verification & Unit Testing
+## 6. Verification & Unit Testing
 
 Run the full automated verification test suite:
 ```bash
@@ -123,7 +243,7 @@ The test suite covers:
 
 ---
 
-## 6. Step-by-Step Execution Guide
+## 7. Step-by-Step Execution Guide
 
 ### Step 1: Run 10-Point Dataset Validation
 Audit dataset splits before training:
@@ -205,7 +325,7 @@ Compares router precision/recall against a ground-truth same-object oracle per e
 
 ---
 
-## 7. Directory Structure
+## 8. Directory Structure
 
 ```
 ucr_mfg/
