@@ -61,6 +61,7 @@ class VisDroneDataset(BaseDataset):
 
         boxes_list = []
         labels_list = []
+        occlusion_list = []
         ignore_mask_orig = np.zeros((orig_h, orig_w), dtype=np.uint8)
 
         if os.path.exists(anno_path):
@@ -76,6 +77,7 @@ class VisDroneDataset(BaseDataset):
                         h = float(parts[3])
                         score = int(parts[4])
                         category = int(parts[5])
+                        occlusion = int(parts[7])
                     except ValueError:
                         continue
 
@@ -96,6 +98,7 @@ class VisDroneDataset(BaseDataset):
                     elif 1 <= category <= 10:
                         boxes_list.append([x1, y1, x2, y2])
                         labels_list.append(category - 1)  # 0-indexed: 0..9
+                        occlusion_list.append(occlusion)
 
         if boxes_list:
             raw_boxes = torch.tensor(boxes_list, dtype=torch.float32)
@@ -115,6 +118,7 @@ class VisDroneDataset(BaseDataset):
             "image": image_tensor,
             "boxes": boxes,
             "labels": raw_labels,
+            "occlusion": torch.tensor(occlusion_list, dtype=torch.int64),
             "ignore_mask": ignore_mask,
             "orig_size": (orig_h, orig_w),
             "scale_factor": (scale, scale),

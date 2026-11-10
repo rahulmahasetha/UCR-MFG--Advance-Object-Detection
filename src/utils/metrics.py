@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
@@ -47,7 +47,6 @@ def compute_dece(
 
         gt_boxes = gt.get("boxes", np.empty((0, 4)))
         gt_labels = gt.get("labels", np.empty((0,), dtype=int))
-        ignore_mask = gt.get("ignore_mask", None)
 
         if len(pred_boxes) == 0:
             continue
@@ -59,6 +58,7 @@ def compute_dece(
         p_labels = pred_labels[sort_idx]
 
         gt_matched = np.zeros(len(gt_boxes), dtype=bool)
+        center_ignored = ignored_flags(pred, gt)[sort_idx]
 
         for i in range(len(p_boxes)):
             score = float(p_scores[i])
@@ -90,16 +90,7 @@ def compute_dece(
                         matched = True
 
             if not matched:
-                # Check if center falls inside ignore mask
-                cx = int(round((box[0] + box[2]) / 2.0))
-                cy = int(round((box[1] + box[3]) / 2.0))
-                is_ignored = False
-                if ignore_mask is not None:
-                    h, w = ignore_mask.shape
-                    if 0 <= cy < h and 0 <= cx < w and ignore_mask[cy, cx] == 1:
-                        is_ignored = True
-
-                if not is_ignored:
+                if not center_ignored[i]:
                     # Background False Alarm (False Positive)
                     all_scores.append(score)
                     all_correct.append(0)
@@ -139,19 +130,28 @@ def _center_ignored(boxes: np.ndarray, ignore_mask: Optional[np.ndarray]) -> np.
     return ignore_mask[cy, cx] > 0
 
 
+def ignored_flags(pred: Dict[str, np.ndarray], gt: Dict[str, Any]) -> np.ndarray:
+    """Whether each detection's centre lies in an ignore region (precomputed at inference when available)."""
+    if "center_ignored" in pred:
+        return pred["center_ignored"]
+    return _center_ignored(pred["boxes"], gt.get("ignore_mask"))
+
+
 def match_detections(
     pred_boxes: np.ndarray, gt_boxes: np.ndarray, gt_ignore: np.ndarray, thresholds: Sequence[float]
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Greedy COCO matching of score-sorted predictions at every IoU threshold.
 
-    Returns (tp, ignored), each [T, P]; matches to ignored GT are neither TP nor FP.
+    Returns (tp, ignored, gt_index), each [T, P]; matches to ignored GT are neither TP nor FP and
+    gt_index is -1 for unmatched predictions.
     """
     thresholds = np.asarray(thresholds)
     num_t, num_p = len(thresholds), len(pred_boxes)
     tp = np.zeros((num_t, num_p), dtype=bool)
     ignored = np.zeros((num_t, num_p), dtype=bool)
+    gt_index = np.full((num_t, num_p), -1, dtype=np.int64)
     if num_p == 0 or len(gt_boxes) == 0:
-        return tp, ignored
+        return tp, ignored, gt_index
 
     ious = compute_iou_matrix(pred_boxes, gt_boxes)
     matched = np.zeros((num_t, len(gt_boxes)), dtype=bool)
@@ -165,7 +165,40 @@ def match_detections(
         matched[rows[hit], best[hit]] = True
         tp[hit, i] = ~gt_ignore[best[hit]]
         ignored[hit, i] = gt_ignore[best[hit]]
-    return tp, ignored
+        gt_index[hit, i] = best[hit]
+    return tp, ignored, gt_index
+
+
+def build_records(
+    predictions: List[Dict[str, np.ndarray]],
+    ground_truths: List[Dict[str, Any]],
+    num_classes: int,
+    area: Tuple[float, float] = (0.0, np.inf),
+    gt_keep: Optional[Callable[[Dict[str, Any]], np.ndarray]] = None,
+) -> List[List[Tuple[np.ndarray, np.ndarray, np.ndarray, int]]]:
+    """Per-class, per-image matching records (scores, tp, ignored, num_gt) for fast AP and bootstrap.
+
+    GT outside `area` or rejected by `gt_keep` is ignored rather than removed, so detections of it are
+    neither rewarded nor penalised. Unmatched detections centred in an ignore region are also ignored.
+    """
+    lo, hi = area
+    records = [[] for _ in range(num_classes)]
+    for pred, gt in zip(predictions, ground_truths):
+        keep_all = gt_keep(gt) if gt_keep is not None else np.ones(len(gt["labels"]), dtype=bool)
+        in_ignore_region = ignored_flags(pred, gt)
+        for c in range(num_classes):
+            pm = np.where(pred["labels"] == c)[0]
+            pm = pm[np.argsort(-pred["scores"][pm], kind="mergesort")]
+            p_boxes = pred["boxes"][pm]
+            gm = gt["labels"] == c
+            g_area = _area(gt["boxes"][gm])
+            g_ignore = (g_area < lo) | (g_area >= hi) | ~keep_all[gm]
+            tp, ign, _ = match_detections(p_boxes, gt["boxes"][gm], g_ignore, IOU_THRESHOLDS)
+            p_area = _area(p_boxes)
+            drop = (p_area < lo) | (p_area >= hi) | in_ignore_region[pm]
+            ign |= ~tp & ~ign & drop[None]
+            records[c].append((pred["scores"][pm], tp, ign, int((~g_ignore).sum())))
+    return records
 
 
 def _average_precision(scores: np.ndarray, tp: np.ndarray, ignored: np.ndarray, num_gt: int) -> np.ndarray:
@@ -189,75 +222,113 @@ def _average_precision(scores: np.ndarray, tp: np.ndarray, ignored: np.ndarray, 
     return ap
 
 
+def ap_from_records(records, image_indices: Optional[Sequence[int]] = None) -> np.ndarray:
+    """[num_classes, T] AP (NaN for classes without GT) over all images or a (re)sampled index list."""
+    out = []
+    for per_image in records:
+        chosen = per_image if image_indices is None else [per_image[i] for i in image_indices]
+        out.append(_average_precision(
+            np.concatenate([r[0] for r in chosen]),
+            np.concatenate([r[1] for r in chosen], axis=1),
+            np.concatenate([r[2] for r in chosen], axis=1),
+            sum(r[3] for r in chosen),
+        ))
+    return np.stack(out)
+
+
+def _nanmean(x: np.ndarray) -> float:
+    return float(np.nanmean(x)) if np.isfinite(x).any() else float("nan")
+
+
+def recall_at(records, iou_index: int = 0) -> float:
+    hits = sum(int(r[1][iou_index].sum()) for per_image in records for r in per_image)
+    total = sum(r[3] for per_image in records for r in per_image)
+    return hits / total if total else float("nan")
+
+
 def compute_map(
-    predictions: List[Dict[str, np.ndarray]], ground_truths: List[Dict[str, Any]], num_classes: int
+    predictions: List[Dict[str, np.ndarray]],
+    ground_truths: List[Dict[str, Any]],
+    num_classes: int,
+    gt_keep: Optional[Callable[[Dict[str, Any]], np.ndarray]] = None,
 ) -> Dict[str, Any]:
     """COCO-style AP over IoU 0.50:0.95 (101-point), with area breakdown and VisDrone ignore regions."""
-    per_area = {}
-    for name, (lo, hi) in AREA_RANGES.items():
-        ap = np.full((num_classes, len(IOU_THRESHOLDS)), np.nan)
-        for c in range(num_classes):
-            scores, tps, igns, num_gt = [], [], [], 0
-            for pred, gt in zip(predictions, ground_truths):
-                pm = pred["labels"] == c
-                order = np.argsort(-pred["scores"][pm], kind="mergesort")
-                p_boxes, p_scores = pred["boxes"][pm][order], pred["scores"][pm][order]
-                g_boxes = gt["boxes"][gt["labels"] == c]
-                g_area = _area(g_boxes)
-                g_ignore = (g_area < lo) | (g_area >= hi)
-                num_gt += int((~g_ignore).sum())
-
-                tp, ign = match_detections(p_boxes, g_boxes, g_ignore, IOU_THRESHOLDS)
-                p_area = _area(p_boxes)
-                drop = (p_area < lo) | (p_area >= hi) | _center_ignored(p_boxes, gt.get("ignore_mask"))
-                ign |= ~tp & ~ign & drop[None]
-                scores.append(p_scores)
-                tps.append(tp)
-                igns.append(ign)
-            ap[c] = _average_precision(np.concatenate(scores), np.concatenate(tps, 1), np.concatenate(igns, 1), num_gt)
-        per_area[name] = ap
-
-    def mean(x: np.ndarray) -> float:
-        return float(np.nanmean(x)) if np.isfinite(x).any() else 0.0
-
+    per_area = {
+        name: ap_from_records(build_records(predictions, ground_truths, num_classes, rng, gt_keep))
+        for name, rng in AREA_RANGES.items()
+    }
     full = per_area["all"]
     return {
-        "mAP": mean(full),
-        "AP50": mean(full[:, 0]),
-        "AP75": mean(full[:, 5]),
-        "APs": mean(per_area["small"]),
-        "APm": mean(per_area["medium"]),
-        "APl": mean(per_area["large"]),
-        "per_class_AP": [mean(full[c]) for c in range(num_classes)],
+        "mAP": _nanmean(full),
+        "AP50": _nanmean(full[:, 0]),
+        "AP75": _nanmean(full[:, 5]),
+        "APs": _nanmean(per_area["small"]),
+        "APm": _nanmean(per_area["medium"]),
+        "APl": _nanmean(per_area["large"]),
+        "per_class_AP": [_nanmean(full[c]) for c in range(num_classes)],
     }
+
+
+def occlusion_breakdown(
+    predictions: List[Dict[str, np.ndarray]], ground_truths: List[Dict[str, Any]], num_classes: int
+) -> Dict[str, Dict[str, float]]:
+    """AP and recall@0.5 per VisDrone occlusion level (0 none, 1 partial 1-50%, 2 heavy 50-100%)."""
+    if not all("occlusion" in gt for gt in ground_truths):
+        return {}
+    out = {}
+    for level, name in enumerate(("none", "partial", "heavy")):
+        records = build_records(predictions, ground_truths, num_classes, gt_keep=lambda gt, k=level: gt["occlusion"] == k)
+        ap = ap_from_records(records)
+        out[name] = {
+            "mAP": _nanmean(ap), "AP50": _nanmean(ap[:, 0]), "recall50": recall_at(records),
+            "num_gt": int(sum(r[3] for per_image in records for r in per_image)),
+        }
+    return out
+
+
+def detection_outcomes(
+    predictions: List[Dict[str, np.ndarray]], ground_truths: List[Dict[str, Any]], iou_thresh: float = 0.5
+) -> List[Dict[str, np.ndarray]]:
+    """Per detection: is_tp (same class, IoU >= thresh, first match), counted (not an ignored-region FP),
+    and the matched GT index (-1 if none)."""
+    outcomes = []
+    for pred, gt in zip(predictions, ground_truths):
+        n = len(pred["scores"])
+        is_tp, is_ign = np.zeros(n, bool), np.zeros(n, bool)
+        gt_index = np.full(n, -1, dtype=np.int64)
+        for c in np.unique(pred["labels"]):
+            idx = np.where(pred["labels"] == c)[0]
+            idx = idx[np.argsort(-pred["scores"][idx], kind="mergesort")]
+            gm = np.where(gt["labels"] == c)[0]
+            tp, ign, gi = match_detections(pred["boxes"][idx], gt["boxes"][gm], np.zeros(len(gm), bool), [iou_thresh])
+            is_tp[idx], is_ign[idx] = tp[0], ign[0]
+            gt_index[idx] = np.where(gi[0] >= 0, gm[np.maximum(gi[0], 0)] if len(gm) else -1, -1)
+        counted = is_tp | ~ignored_flags(pred, gt)
+        outcomes.append({"is_tp": is_tp, "counted": counted, "gt_index": gt_index})
+    return outcomes
+
+
+def uncertainty_value(pred: Dict[str, np.ndarray], key: str) -> np.ndarray:
+    if key == "1-score":
+        return 1.0 - pred["scores"]
+    v = pred[key]
+    return v.mean(axis=1) if v.ndim > 1 else v
 
 
 def uncertainty_auroc(
     predictions: List[Dict[str, np.ndarray]],
     ground_truths: List[Dict[str, Any]],
-    keys: Sequence[str] = ("u_a", "u_e", "box_std"),
+    keys: Sequence[str] = ("u_a", "u_e", "box_std", "1-score"),
     iou_thresh: float = 0.5,
+    outcomes: Optional[List[Dict[str, np.ndarray]]] = None,
 ) -> Dict[str, float]:
-    """AUROC of each uncertainty for separating false from true detections (higher = more informative).
-    The confidence baseline uses 1 - score."""
-    errors, values = [], {k: [] for k in (*keys, "1-score")}
-    for pred, gt in zip(predictions, ground_truths):
-        is_tp = np.zeros(len(pred["scores"]), dtype=bool)
-        is_ign = np.zeros_like(is_tp)
-        for c in np.unique(pred["labels"]):
-            idx = np.where(pred["labels"] == c)[0]
-            idx = idx[np.argsort(-pred["scores"][idx], kind="mergesort")]
-            g_boxes = gt["boxes"][gt["labels"] == c]
-            tp, ign = match_detections(pred["boxes"][idx], g_boxes, np.zeros(len(g_boxes), bool), [iou_thresh])
-            is_tp[idx], is_ign[idx] = tp[0], ign[0]
-        keep = is_tp | ~_center_ignored(pred["boxes"], gt.get("ignore_mask"))
-        errors.append(~is_tp[keep])
-        for k in keys:
-            v = pred[k]
-            values[k].append((v.mean(axis=1) if v.ndim > 1 else v)[keep])
-        values["1-score"].append(1.0 - pred["scores"][keep])
-
+    """AUROC of each uncertainty for separating false from true detections (0.5 = chance)."""
+    outcomes = outcomes or detection_outcomes(predictions, ground_truths, iou_thresh)
+    errors = [~o["is_tp"][o["counted"]] for o in outcomes]
     y = np.concatenate(errors) if errors else np.zeros(0, bool)
     if y.size == 0 or y.all() or not y.any():
-        return {k: float("nan") for k in values}
-    return {k: float(roc_auc_score(y, np.concatenate(v))) for k, v in values.items()}
+        return {k: float("nan") for k in keys}
+    return {
+        k: float(roc_auc_score(y, np.concatenate([uncertainty_value(p, k)[o["counted"]] for p, o in zip(predictions, outcomes)])))
+        for k in keys
+    }

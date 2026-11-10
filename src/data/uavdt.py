@@ -8,6 +8,23 @@ from src.data.dataset import BaseDataset
 from src.data.transforms import resize_and_pad, transform_boxes, transform_ignore_mask
 
 
+ATTRIBUTE_GROUPS = {
+    "weather": ("daylight", "night", "fog"),
+    "altitude": ("low", "medium", "high"),
+    "view": ("front", "side", "bird"),
+}
+
+
+def parse_attributes(path: str) -> Dict[str, Any]:
+    """UAVDT M_attr flags: daylight, night, fog, low/medium/high altitude, front/side/bird view, long-term."""
+    with open(path) as f:
+        flags = [int(v) for v in f.read().strip().split(",")]
+    attributes: Dict[str, Any] = {"long_term": bool(flags[9]) if len(flags) > 9 else False}
+    for g, (name, values) in enumerate(ATTRIBUTE_GROUPS.items()):
+        attributes[name] = [v for v, flag in zip(values, flags[3 * g:3 * g + 3]) if flag]
+    return attributes
+
+
 class UAVDTDataset(BaseDataset):
     """UAVDT Benchmark cross-domain generalization evaluation dataset loader.
     
@@ -33,6 +50,9 @@ class UAVDTDataset(BaseDataset):
 
         seq_files = sorted([f for f in os.listdir(self.attr_dir) if f.endswith("_attr.txt")])
         self.sequence_names = [f.split("_attr.txt")[0].strip() for f in seq_files]
+        self.sequence_attributes = {
+            f.split("_attr.txt")[0].strip(): parse_attributes(os.path.join(self.attr_dir, f)) for f in seq_files
+        }
 
         self.frames: List[Tuple[str, str, int]] = []  # (seq_name, img_path, frame_idx)
         self.annotations_cache: Dict[str, Dict[int, List[List[float]]]] = {}
@@ -134,6 +154,7 @@ class UAVDTDataset(BaseDataset):
             "image": image_tensor,
             "boxes": boxes,
             "labels": raw_labels,
+            "attributes": self.sequence_attributes.get(seq_name, {}),
             "ignore_mask": ignore_mask,
             "orig_size": (orig_h, orig_w),
             "scale_factor": (scale, scale),

@@ -13,7 +13,9 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     orig_sizes = [b["orig_size"] for b in batch]
     scale_factors = [b["scale_factor"] for b in batch]
 
+    extras = {k: [b[k] for b in batch] for k in ("occlusion", "attributes") if all(k in b for b in batch)}
     return {
+        **extras,
         "images": images,
         "boxes": boxes,
         "labels": labels,

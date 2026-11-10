@@ -5,7 +5,12 @@ os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import argparse
+import json
+import random
+import time
 from contextlib import nullcontext
+
+import numpy as np
 
 import torch
 import yaml
@@ -26,9 +31,6 @@ from src.utils.checkpoint import (
     save_atomic,
 )
 from src.utils.progress import TrainingProgressDisplay
-
-SEED = 42
-
 
 def default_device() -> str:
     if torch.cuda.is_available():
@@ -94,11 +96,15 @@ def main():
     save_every = args.save_every if args.save_every is not None else ckpt_cfg.get("save_every_steps", 0)
     ckpt_dir = ckpt_cfg["save_dir"]
     os.makedirs(ckpt_dir, exist_ok=True)
-    print(f"[INIT] UCR-MFG training on {device}")
+    seed = int(train_cfg.get("seed", 42))
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    print(f"[INIT] UCR-MFG training on {device} (seed {seed})")
 
     root = ds_cfg["root_dir"]
     train_set = VisDroneDataset(root, "train", img_size, is_train=True)
-    sampler = ResumableEpochSampler(len(train_set), seed=SEED)
+    sampler = ResumableEpochSampler(len(train_set), seed=seed)
     train_loader = make_loader(train_set, batch_size, device, sampler)
     val_loader = make_loader(VisDroneDataset(root, "val", img_size, is_train=False), val_cfg.get("batch_size", batch_size), device)
     batches_per_epoch = len(train_set) // batch_size
@@ -146,6 +152,7 @@ def main():
         epoch_losses = dict(resumed_losses) if epoch == start_epoch else {}
         sampler.set_epoch(epoch, start=first_batch * batch_size)
         progress.start_epoch(epoch)
+        epoch_start = time.time()
         if first_batch:
             print(f"[RESUME] Skipping {first_batch} completed batches of epoch {epoch}")
 
@@ -156,7 +163,7 @@ def main():
             dense = stage >= 3 and model.router.enabled and global_step % benefit_interval == 0
 
             with autocast():
-                outputs = model(images, generator=mc_generator(SEED, epoch, batch_idx, device), dense_routing=dense)
+                outputs = model(images, generator=mc_generator(seed, epoch, batch_idx, device), dense_routing=dense)
                 locs = locations(outputs["head"]["cls"])
                 losses = loss_fn(outputs, assign_targets(model, locs, batch, device), locs, boxes)
             if dense:
@@ -217,7 +224,14 @@ def main():
                 best_metric = val_map
                 save("best.pth", epoch, stage)
 
-        progress.end_epoch(epoch, {k: v / batches_per_epoch for k, v in epoch_losses.items()}, val_map)
+        avg_losses = {k: v / batches_per_epoch for k, v in epoch_losses.items()}
+        progress.end_epoch(epoch, avg_losses, val_map)
+        log_entry = {"epoch": epoch, "stage": stage, "lr": optimizer.param_groups[0]["lr"], "global_step": global_step,
+                     "epoch_seconds": round(time.time() - epoch_start, 1), "resumed_mid_epoch": bool(first_batch), **avg_losses}
+        if val_map is not None:
+            log_entry.update({f"val_{k}": metrics[k] for k in ("mAP", "AP50", "AP75", "APs", "APm", "APl", "D-ECE")})
+        with open(os.path.join(ckpt_dir, "train_log.jsonl"), "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
         save("latest.pth", epoch, stage)
         save(f"epoch_{epoch:03d}.pth", epoch, stage)
         purge_old_checkpoints(ckpt_dir, keep_last_n=ckpt_cfg["keep_last_n"])

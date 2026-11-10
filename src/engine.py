@@ -6,7 +6,8 @@ import torch
 from src.models.graph_ops import Routing
 from src.models.postprocess import postprocess
 from src.models.uncertainty_head import mc_generator
-from src.utils.metrics import compute_dece, compute_map, uncertainty_auroc
+from src.data.corruptions import corrupt
+from src.utils.metrics import compute_dece, compute_map, ignored_flags, occlusion_breakdown, uncertainty_auroc
 
 
 class LocationCache:
@@ -46,14 +47,19 @@ def predict(
     label_map: Optional[Dict[int, int]] = None,
     max_batches: Optional[int] = None,
     seed: int = 0,
+    corruption: Optional[Tuple[str, int]] = None,
 ) -> Tuple[List[Dict[str, np.ndarray]], List[Dict[str, Any]]]:
+    """Runs inference and returns per-image detections and ground truth (numpy), optionally on corrupted input."""
     model.eval()
     locations = LocationCache(model.det_head)
     preds, gts = [], []
     for i, batch in enumerate(loader):
         if max_batches is not None and i >= max_batches:
             break
-        images = batch["images"].to(device)
+        images = batch["images"]
+        if corruption is not None:
+            images = corrupt(images, corruption[0], corruption[1], seed=seed * 1000003 + i)
+        images = images.to(device)
         outputs = model(images, generator=mc_generator(seed, 0, i, device))
         dets = postprocess(outputs, locations(outputs["head"]["cls"]), model.strides, images.shape[-2:], **infer_cfg)
         for b, det in enumerate(dets):
@@ -63,18 +69,50 @@ def predict(
                 det = {k: v[keep] for k, v in det.items()}
                 det["labels"] = np.array([label_map[int(l)] for l in det["labels"]], dtype=np.int64)
             preds.append(det)
-            gts.append({
+            gt = {
+                "image_id": batch["image_ids"][b],
                 "boxes": batch["boxes"][b].numpy(),
                 "labels": batch["labels"][b].numpy(),
                 "ignore_mask": batch["ignore_masks"][b].numpy(),
-            })
+            }
+            if "occlusion" in batch:
+                gt["occlusion"] = batch["occlusion"][b].numpy()
+            if "attributes" in batch:
+                gt["attributes"] = batch["attributes"][b]
+            preds[-1]["image_id"] = gt["image_id"]
+            preds[-1]["center_ignored"] = ignored_flags(preds[-1], gt)
+            gts.append(gt)
     return preds, gts
+
+
+def summarize(preds: List[Dict[str, np.ndarray]], gts: List[Dict[str, Any]], num_classes: int) -> Dict[str, Any]:
+    """All paper metrics for one evaluation: accuracy, calibration, uncertainty AUROC, occlusion and condition subsets."""
+    metrics = compute_map(preds, gts, num_classes)
+    metrics["D-ECE"] = compute_dece(preds, gts, num_classes=num_classes)
+    metrics["AUROC"] = uncertainty_auroc(preds, gts)
+    metrics["occlusion"] = occlusion_breakdown(preds, gts, num_classes)
+    metrics["conditions"] = condition_breakdown(preds, gts, num_classes)
+    metrics["num_images"] = len(preds)
+    return metrics
+
+
+def condition_breakdown(preds, gts, num_classes: int) -> Dict[str, Dict[str, Any]]:
+    """mAP / AP50 per UAVDT weather and altitude condition (images grouped by sequence attributes)."""
+    if not all("attributes" in gt for gt in gts):
+        return {}
+    out = {}
+    for group in ("weather", "altitude"):
+        values = sorted({v for gt in gts for v in gt["attributes"].get(group, [])})
+        for value in values:
+            idx = [i for i, gt in enumerate(gts) if value in gt["attributes"].get(group, [])]
+            m = compute_map([preds[i] for i in idx], [gts[i] for i in idx], num_classes)
+            out[f"{group}:{value}"] = {"mAP": m["mAP"], "AP50": m["AP50"], "num_images": len(idx)}
+    return out
 
 
 def evaluate(model, loader, device, infer_cfg: Dict[str, Any], num_classes: int, **kwargs) -> Dict[str, Any]:
     preds, gts = predict(model, loader, device, infer_cfg, **kwargs)
     metrics = compute_map(preds, gts, num_classes)
     metrics["D-ECE"] = compute_dece(preds, gts, num_classes=num_classes)
-    metrics["AUROC"] = uncertainty_auroc(preds, gts)
     metrics["num_images"] = len(preds)
     return metrics

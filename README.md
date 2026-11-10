@@ -323,6 +323,37 @@ python scripts/oracle_router_pilot.py --weights checkpoints/visdrone_primary/bes
 ```
 Compares router precision/recall against a ground-truth same-object oracle per edge type.
 
+### Step 8: Paper Experiments, Tables and Figures
+Every number in the paper tables comes from a measured result file. Missing results are shown as `—`, evaluations on image subsets are excluded, and external baselines appear only with a cited source.
+
+```bash
+# 1. Training configs for the full model, two in-house baselines and nine ablations (3 seeds; "short" = 50 epochs)
+python scripts/make_experiment_configs.py --seeds 42 43 44 --schedule full
+python scripts/train.py --config configs/paper/paper_ucr_mfg_full_s42.yaml        # repeat for each config
+
+# 2. All evaluations for one trained model: val, test-dev, UAVDT zero-shot, 6 corruptions x 3 severities
+python scripts/run_paper_eval.py --weights checkpoints/paper/paper_ucr_mfg_full_s42/best.pth
+python scripts/eval.py --weights <best.pth> --split test_dev --mc-passes 1     # optional: T sensitivity (also 2, 5)
+
+# 3. Cost, qualitative figures, then every table, figure and a status checklist
+python scripts/benchmark.py --weights checkpoints/paper/*/best.pth
+python scripts/visualize.py --weights checkpoints/paper/paper_ucr_mfg_full_s42/best.pth --num 6
+python scripts/make_paper_artifacts.py            # -> paper/tables/*.md|.tex, paper/figures/*.pdf|.png, paper/STATUS.md
+```
+
+| Output | Content |
+|---|---|
+| `main_visdrone` | test-dev comparison: external baselines (`results/external_baselines.yaml`), detector-only, MFG-style, UCR-MFG |
+| `ablations` | nine ablations on val with Δ mAP and paired bootstrap p-values (Holm–Bonferroni) |
+| `uavdt_zero_shot` | zero-shot transfer overall and per weather (daylight / night / fog) and altitude |
+| `occlusion` | AP50 and recall per VisDrone occlusion level |
+| `robustness` | mAP under blur, motion blur, noise, fog, low light and low contrast |
+| `uncertainty` | D-ECE, error-detection AUROC, AURC, OOD AUROC of $U^e$ (VisDrone vs UAVDT) |
+| `efficiency`, `mc_passes` | parameters, GFLOPs, latency, routed edges; effect of the number of MC passes |
+| figures | reliability, risk–coverage, uncertainty vs occlusion, domain shift, robustness, training curves, qualitative |
+
+`paper/STATUS.md` lists what is still missing: untrained or incomplete runs, single-seed rows, missing evaluations, frame-strided UAVDT, uncommitted code and unsourced baselines.
+
 ---
 
 ## 8. Directory Structure

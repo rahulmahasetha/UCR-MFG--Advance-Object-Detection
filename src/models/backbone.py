@@ -38,9 +38,12 @@ class ResNetFPNBackbone(nn.Module):
         self.smooth_p5 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
         self.smooth_p4 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
         self.smooth_p3 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.register_buffer("pixel_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1), persistent=False)
+        self.register_buffer("pixel_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1), persistent=False)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        # Bottom-up path
+        """x: [B, 3, H, W] RGB in [0, 1]; ImageNet normalisation is applied here to match the pretrained weights."""
+        x = (x - self.pixel_mean) / self.pixel_std
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)

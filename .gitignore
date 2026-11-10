@@ -41,3 +41,6 @@ wandb/
 .DS_Store
 Thumbs.db
 
+
+# Evaluation outputs (large per-detection predictions stay local)
+results/**/*.pkl
