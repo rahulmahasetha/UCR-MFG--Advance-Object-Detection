@@ -28,7 +28,7 @@ train:
       active_modules: ["mpnn", "fusion"]
       losses: ["all"]
 val:
-  interval: 5
+  interval: 1   # validate every epoch -> best.pth + val metrics in train_log.jsonl
   batch_size: 2
   max_batches: null
 checkpoint:

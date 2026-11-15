@@ -71,7 +71,9 @@ class PreGraphUncertaintyHead(nn.Module):
         use_mc = compute_epistemic and self.mc_passes > 1
 
         for f in features:
-            feat = self.tower(f)
+            # Detached input: uncertainty losses train this head only and can never push gradients into the
+            # shared backbone/FPN (their NLL spikes collapsed detection at UAVDT epoch 55). Forward values unchanged.
+            feat = self.tower(f.detach())
             log_var = self.box_var_head(feat)
             cls_logits = self.cls_head(feat)
             c_pre = torch.sigmoid(self.centerness_head(feat))

@@ -1,0 +1,44 @@
+# Re-run of stage 1 only (epochs 1-20) with the current code, 100-epoch cosine schedule kept; stopped after stage1_end.pth.
+experiment_name: "ucr_mfg_uavdt_stage1_rerun"
+mode: "primary_training"
+dataset_config: "configs/datasets/uavdt.yaml"
+model_config: "configs/model/default.yaml"
+train:
+  max_epochs: 100
+  batch_size: 2
+  accumulate_grad_batches: 2
+  optimizer: "AdamW"
+  lr: 0.0001
+  weight_decay: 0.0001
+  scheduler: "CosineAnnealingLR"
+  img_size: [544, 1024]  # (H, W): native 1024x540 frames, no downscaling / no wasted padding
+  init_weights: "coco_fcos"  # start from COCO-trained FCOS-R50-FPN (backbone, FPN, head towers, car/truck/bus)
+  frame_stride: 30     # every 30th frame (~1/s of video) -> 813 train images; ~8.5-10 h for 100 epochs on M5 Air
+  stages:
+    stage_1:
+      epochs: [1, 20]
+      active_modules: ["backbone", "fpn", "unc_head", "det_head"]
+      losses: ["det", "unc"]
+    stage_2:
+      epochs: [21, 40]
+      active_modules: ["graph_builder"]
+      losses: ["det", "unc", "graph"]
+    stage_3:
+      epochs: [41, 60]
+      active_modules: ["router"]
+      losses: ["det", "unc", "graph", "inst", "benefit"]
+    stage_4:
+      epochs: [61, 100]
+      active_modules: ["mpnn", "fusion"]
+      losses: ["all"]
+val:
+  interval: 5        # 20 validations over 100 epochs -> best.pth + val metrics in train_log.jsonl
+  frame_stride: 30   # ~530 of 15,284 test frames; run full test (stride 1) for final numbers
+  batch_size: 2
+  max_batches: null
+checkpoint:
+  save_dir: "checkpoints/uavdt_stage1_rerun"
+  save_every_steps: 500
+  save_latest: true
+  save_best: true
+  keep_last_n: 3

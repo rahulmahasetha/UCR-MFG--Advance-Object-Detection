@@ -47,7 +47,8 @@ class FCOSHead(nn.Module):
             out["cls"].append(self.cls_pred(cls_feat))
             out["cen"].append(self.cen_pred(cls_feat))
             out["reg"].append(torch.exp(self.scales[lvl](self.reg_pred(reg_feat)).clamp(-10.0, 10.0)))
-            out["log_var"].append(self.var_pred(reg_feat).clamp(-10.0, 10.0))
+            # Detached: the variance NLL trains var_pred only, not the regression tower or backbone.
+            out["log_var"].append(self.var_pred(reg_feat.detach()).clamp(-10.0, 10.0))
         return out
 
     @torch.no_grad()

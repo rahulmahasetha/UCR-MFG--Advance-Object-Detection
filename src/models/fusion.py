@@ -3,7 +3,7 @@ from typing import List, Sequence
 import torch
 import torch.nn as nn
 
-FUSION_MODES = ("gate", "fixed", "add")
+FUSION_MODES = ("gate", "fixed", "add", "residual")
 
 
 class UncertaintyFusionGate(nn.Module):
@@ -12,6 +12,8 @@ class UncertaintyFusionGate(nn.Module):
     lambda in (0, 1)^C is predicted per location from [F, H, Ua, Ue]. The gate starts near the visual
     features (lambda ~ 0.88) so freshly enabled graph features cannot disrupt detection.
     `fixed` (lambda = 0.5) and `add` (F + H) are ablation baselines.
+    `residual`: Z = F + (1 - lambda) * H. Never shrinks the visual features, and with 1 - lambda = 0.1 at the
+    stage start it equals the stage-3 input F + 0.1 * H exactly, so stage 4 starts from the stage-3 detector.
     """
 
     def __init__(self, channels: int = 256, mode: str = "gate", init_visual_bias: float = 2.0):
@@ -41,5 +43,8 @@ class UncertaintyFusionGate(nn.Module):
         fused = []
         for f, h, ua, ue in zip(f_list, h_list, ua_list, ue_list):
             gate = torch.sigmoid(self.gate_conv(torch.cat([f, h, ua.to(f.dtype), ue.to(f.dtype)], dim=1)))
-            fused.append(gate * f + (1.0 - gate) * h)
+            if self.mode == "residual":
+                fused.append(f + (1.0 - gate) * h)
+            else:
+                fused.append(gate * f + (1.0 - gate) * h)
         return fused

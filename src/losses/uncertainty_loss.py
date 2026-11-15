@@ -5,15 +5,26 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+BETA_NLL = 0.5
+LOG_VAR_MIN = -6.0
+
+
 def gaussian_nll(log_var: torch.Tensor, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Summed heteroscedastic Gaussian NLL over log ltrb distances (a log-normal box model).
 
     Log space keeps the error scale-free and bounded for untrained heads; the mean is detached so
     variance learning cannot move the boxes.
     """
-    log_var = log_var.float().clamp(-10.0, 10.0)
+    # Floor of -6 caps the error weight exp(-log_var) at ~400. At -10 (~22,000x) an over-confident
+    # head turned one hard batch into exploding gradients that wrecked the shared backbone (UAVDT ep 55).
+    # Soft floor at LOG_VAR_MIN: a hard clamp has zero gradient below it, so an over-confident head stuck
+    # there could never become less confident again. softplus keeps a gradient everywhere.
+    log_var = (LOG_VAR_MIN + F.softplus(log_var.float() - LOG_VAR_MIN)).clamp(max=10.0)
     sq_err = (target.float().clamp(min=1e-3).log() - pred.detach().float().clamp(min=1e-3).log()) ** 2
-    return (0.5 * torch.exp(-log_var) * sq_err + 0.5 * log_var).sum()
+    nll = 0.5 * torch.exp(-log_var) * sq_err + 0.5 * log_var
+    # beta-NLL (Seitzer et al., ICLR 2022, beta=0.5): weighting by detached sigma^(2*beta) keeps the optimum
+    # (sigma^2 = squared error) but shrinks the gradient of over-confident points from ~e^6 to ~e^3.
+    return (torch.exp(BETA_NLL * log_var).detach() * nll).sum()
 
 
 class UncertaintyLoss(nn.Module):

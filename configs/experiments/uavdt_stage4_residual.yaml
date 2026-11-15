@@ -1,0 +1,53 @@
+# Stage 4 with residual fusion Z = F + (1-lambda)*H, started exactly at the stage-3 model (detector frozen).
+# Resume from the healthy stage-3 checkpoint: --resume saved_models/uavdt_ep54_before_collapse.pth
+experiment_name: "ucr_mfg_uavdt_stage4_residual"
+mode: "primary_training"
+dataset_config: "configs/datasets/uavdt.yaml"
+model_config: "configs/model/residual.yaml"
+train:
+  max_epochs: 100
+  batch_size: 2
+  accumulate_grad_batches: 2
+  optimizer: "AdamW"
+  lr: 0.0001
+  weight_decay: 0.0001
+  scheduler: "CosineAnnealingLR"
+  img_size: [544, 1024]  # (H, W): native 1024x540 frames, no downscaling / no wasted padding
+  init_weights: "coco_fcos"  # start from COCO-trained FCOS-R50-FPN (backbone, FPN, head towers, car/truck/bus)
+  frame_stride: 30     # every 30th frame (~1/s of video) -> 813 train images; ~8.5-10 h for 100 epochs on M5 Air
+  stages:
+    stage_1:
+      epochs: [1, 20]
+      active_modules: ["backbone", "fpn", "unc_head", "det_head"]
+      losses: ["det", "unc"]
+    stage_2:
+      epochs: [21, 40]
+      active_modules: ["graph_builder"]
+      losses: ["det", "unc", "graph"]
+    stage_3:
+      epochs: [41, 60]
+      active_modules: ["router"]
+      losses: ["det", "unc", "graph", "inst", "benefit"]
+    stage_4:
+      epochs: [61, 100]
+      active_modules: ["mpnn", "fusion"]
+      losses: ["all"]
+      freeze: ["backbone", "det_head"]   # keep the stage-3 detector fixed; only graph modules + fusion learn
+      fusion_mode: "residual"            # Z = F + (1 - lambda) * H, never shrinks F
+      fusion_gate_bias: 2.1972           # ln 9 -> 1 - lambda = 0.1 = stage-3 residual: stage 4 starts identical to stage 3
+      fusion_gate_zero_weights: true     # make that start exact
+      guard:                             # stage 4 never ends below the stage-3 model
+        tolerance: 0.003                 # mAP drop allowed before a rollback (val noise ~ +-0.003)
+        lr_factor: 0.5                   # lr halves after each rollback
+        max_rollbacks: 3                 # 4th drop -> restore best weights and stop
+val:
+  interval: 5        # 20 validations over 100 epochs -> best.pth + val metrics in train_log.jsonl
+  frame_stride: 30   # ~530 of 15,284 test frames; run full test (stride 1) for final numbers
+  batch_size: 2
+  max_batches: null
+checkpoint:
+  save_dir: "checkpoints/uavdt_stage4_residual"
+  save_every_steps: 500
+  save_latest: true
+  save_best: true
+  keep_last_n: 3

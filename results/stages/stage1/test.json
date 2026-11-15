@@ -1,0 +1,210 @@
+{
+  "meta": {
+    "weights": "/Users/rahulmahaseth/Desktop/ucr_mfg/checkpoints/uavdt_stage1_rerun/stage1_end.pth",
+    "experiment": "ucr_mfg_uavdt_stage1_rerun",
+    "variant": "ucr_mfg_uavdt_stage1_rerun",
+    "seed": 42,
+    "epoch": 20,
+    "max_epochs": 100,
+    "stage": 1,
+    "mid_epoch": false,
+    "best_val_mAP": 0.19520305360237086,
+    "config_hash": "9ca878bae045",
+    "train_classes": 3,
+    "inference": {
+      "score_thresh": 0.05,
+      "pre_nms_topk": 1000,
+      "nms_iou": 0.6,
+      "max_dets": 500
+    },
+    "phase": "test",
+    "stride": 5,
+    "offset": 2,
+    "tuning_frames_included": 0,
+    "num_images": 3318,
+    "dataset_size": 16592,
+    "class_names": [
+      "car",
+      "truck",
+      "bus"
+    ],
+    "choice": {
+      "folds": {
+        "M0203": 0,
+        "M0205": 1,
+        "M0208": 0,
+        "M0209": 1,
+        "M0403": 0,
+        "M0601": 1,
+        "M0602": 0,
+        "M0606": 1,
+        "M0701": 0,
+        "M0801": 1,
+        "M0802": 0,
+        "M1001": 1,
+        "M1004": 0,
+        "M1007": 1,
+        "M1009": 0,
+        "M1101": 1,
+        "M1301": 0,
+        "M1302": 1,
+        "M1303": 0,
+        "M1401": 1
+      },
+      "by_fold": {
+        "0": {
+          "scales": [
+            1.0
+          ],
+          "flip": false,
+          "merge": "nms",
+          "nms_iou": 0.6,
+          "sigma": null,
+          "score_thresh": 0.05,
+          "max_dets": 500
+        },
+        "1": {
+          "scales": [
+            1.0
+          ],
+          "flip": false,
+          "merge": "nms",
+          "nms_iou": 0.6,
+          "sigma": null,
+          "score_thresh": 0.05,
+          "max_dets": 500
+        }
+      },
+      "tuned_on": {
+        "stride": 30,
+        "num_images": 554,
+        "margin": 0.002,
+        "rule": "default-only"
+      }
+    },
+    "default": {
+      "scales": [
+        1.0
+      ],
+      "flip": false,
+      "merge": "nms",
+      "nms_iou": 0.6,
+      "sigma": null,
+      "score_thresh": 0.05,
+      "max_dets": 500
+    },
+    "git": "7557096-dirty",
+    "device": "mps",
+    "date": "2026-11-15T22:21:23"
+  },
+  "metrics": {
+    "default": {
+      "mAP": 0.18385216962344347,
+      "AP50": 0.336961897441882,
+      "AP75": 0.1850096403886329,
+      "APs": 0.12399297243385257,
+      "APm": 0.29006952347373066,
+      "APl": 0.29682141510293325,
+      "per_class_AP": [
+        0.34293385296594436,
+        0.033045712089566144,
+        0.17557694381481986
+      ],
+      "D-ECE": 0.0878771987522107,
+      "AUROC": {
+        "u_a": 0.9185665382984842,
+        "u_e": 0.8659644084550666,
+        "box_std": 0.9413795986486122,
+        "1-score": 0.9714220373609923
+      },
+      "occlusion": {},
+      "conditions": {
+        "weather:daylight": {
+          "mAP": 0.1543008963375473,
+          "AP50": 0.2846062930158111,
+          "num_images": 1875
+        },
+        "weather:fog": {
+          "mAP": 0.12041443072954275,
+          "AP50": 0.2813201398198018,
+          "num_images": 435
+        },
+        "weather:night": {
+          "mAP": 0.3051516837908402,
+          "AP50": 0.4976546390385242,
+          "num_images": 1008
+        },
+        "altitude:high": {
+          "mAP": 0.09818091554685977,
+          "AP50": 0.23595809903449635,
+          "num_images": 335
+        },
+        "altitude:low": {
+          "mAP": 0.2978759274806905,
+          "AP50": 0.46235358950975475,
+          "num_images": 1398
+        },
+        "altitude:medium": {
+          "mAP": 0.20527788038814374,
+          "AP50": 0.376787249812318,
+          "num_images": 1585
+        }
+      },
+      "num_images": 3318
+    },
+    "tuned": {
+      "mAP": 0.18385216962344347,
+      "AP50": 0.336961897441882,
+      "AP75": 0.1850096403886329,
+      "APs": 0.12399297243385257,
+      "APm": 0.29006952347373066,
+      "APl": 0.29682141510293325,
+      "per_class_AP": [
+        0.34293385296594436,
+        0.033045712089566144,
+        0.17557694381481986
+      ],
+      "D-ECE": 0.0878771987522107,
+      "AUROC": {
+        "u_a": 0.9185665382984842,
+        "u_e": 0.8659644084550666,
+        "box_std": 0.9413795986486122,
+        "1-score": 0.9714220373609923
+      },
+      "occlusion": {},
+      "conditions": {
+        "weather:daylight": {
+          "mAP": 0.1543008963375473,
+          "AP50": 0.2846062930158111,
+          "num_images": 1875
+        },
+        "weather:fog": {
+          "mAP": 0.12041443072954275,
+          "AP50": 0.2813201398198018,
+          "num_images": 435
+        },
+        "weather:night": {
+          "mAP": 0.3051516837908402,
+          "AP50": 0.4976546390385242,
+          "num_images": 1008
+        },
+        "altitude:high": {
+          "mAP": 0.09818091554685977,
+          "AP50": 0.23595809903449635,
+          "num_images": 335
+        },
+        "altitude:low": {
+          "mAP": 0.2978759274806905,
+          "AP50": 0.46235358950975475,
+          "num_images": 1398
+        },
+        "altitude:medium": {
+          "mAP": 0.20527788038814374,
+          "AP50": 0.376787249812318,
+          "num_images": 1585
+        }
+      },
+      "num_images": 3318
+    }
+  }
+}

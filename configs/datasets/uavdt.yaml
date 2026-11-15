@@ -13,6 +13,7 @@ classes:
     - "car"
     - "truck"
     - "bus"
+  coco_class_ids: [3, 8, 6]   # torchvision COCO indices for car, truck, bus (classifier init)
   mapping_from_visdrone:
     4: 0  # car -> car
     5: 0  # van -> car

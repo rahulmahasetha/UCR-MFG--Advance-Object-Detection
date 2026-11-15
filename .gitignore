@@ -44,3 +44,6 @@ Thumbs.db
 
 # Evaluation outputs (large per-detection predictions stay local)
 results/**/*.pkl
+
+# Research paper source files (kept local)
+paper/

@@ -32,10 +32,16 @@ def assign_targets(model, locations: List[torch.Tensor], batch: Dict[str, Any], 
     return {"cls_targets": cls_t, "reg_targets": reg_t, "cen_targets": cen_t, "pos_masks": pos}
 
 
-def measure_benefit(loss_det: torch.Tensor, routing: Routing, scale: float = 1.0) -> torch.Tensor:
-    """b_ij = -dL_det/dm_ij: first-order decrease of the detection loss from strengthening edge ij."""
-    (grad,) = torch.autograd.grad(loss_det * scale, routing.mask, retain_graph=True)
-    return -grad.detach()
+def measure_benefit(loss_det: torch.Tensor, routing: Routing, scale: float = 1.0) -> Optional[torch.Tensor]:
+    """b_ij = -dL_det/dm_ij: first-order decrease of the detection loss from strengthening edge ij.
+
+    Returns None when the mask does not reach the detection loss in this batch (rare; seen once at UAVDT
+    epoch 57), in which case there is no benefit signal and the caller skips the benefit loss.
+    """
+    if not routing.mask.requires_grad or routing.mask.numel() == 0:
+        return None
+    (grad,) = torch.autograd.grad(loss_det * scale, routing.mask, retain_graph=True, allow_unused=True)
+    return None if grad is None else -grad.detach()
 
 
 @torch.no_grad()

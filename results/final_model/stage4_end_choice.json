@@ -1,0 +1,56 @@
+{
+  "folds": {
+    "M0203": 0,
+    "M0205": 1,
+    "M0208": 0,
+    "M0209": 1,
+    "M0403": 0,
+    "M0601": 1,
+    "M0602": 0,
+    "M0606": 1,
+    "M0701": 0,
+    "M0801": 1,
+    "M0802": 0,
+    "M1001": 1,
+    "M1004": 0,
+    "M1007": 1,
+    "M1009": 0,
+    "M1101": 1,
+    "M1301": 0,
+    "M1302": 1,
+    "M1303": 0,
+    "M1401": 1
+  },
+  "by_fold": {
+    "0": {
+      "scales": [
+        1.0,
+        1.25
+      ],
+      "flip": true,
+      "merge": "nms",
+      "nms_iou": 0.6,
+      "sigma": null,
+      "score_thresh": 0.02,
+      "max_dets": 500
+    },
+    "1": {
+      "scales": [
+        1.0,
+        1.25
+      ],
+      "flip": true,
+      "merge": "nms",
+      "nms_iou": 0.6,
+      "sigma": null,
+      "score_thresh": 0.02,
+      "max_dets": 500
+    }
+  },
+  "tuned_on": {
+    "stride": 30,
+    "num_images": 554,
+    "margin": 0.002,
+    "rule": "robust"
+  }
+}

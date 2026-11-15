@@ -1,0 +1,99 @@
+[MODEL] /Users/rahulmahaseth/Desktop/ucr_mfg/checkpoints/uavdt_stage4_residual/stage4_end.pth  epoch 100 stage 4  device mps  input (544, 1024)
+[TUNE] 554 test frames (stride 30); fold sizes 241 / 313 images, 10 / 10 videos
+[TUNE] 50/554  4.3 min elapsed, ~42.8 min left
+[TUNE] 100/554  8.4 min elapsed, ~38.2 min left
+[TUNE] 150/554  12.6 min elapsed, ~33.8 min left
+[TUNE] 200/554  16.8 min elapsed, ~29.7 min left
+[TUNE] 250/554  20.9 min elapsed, ~25.4 min left
+[TUNE] 300/554  25.0 min elapsed, ~21.2 min left
+[TUNE] 350/554  29.5 min elapsed, ~17.2 min left
+[TUNE] 400/554  33.7 min elapsed, ~13.0 min left
+[TUNE] 450/554  37.9 min elapsed, ~8.7 min left
+[TUNE] 500/554  42.0 min elapsed, ~4.5 min left
+[TUNE] 550/554  46.3 min elapsed, ~0.3 min left
+[TUNE] 554/554  46.6 min elapsed, ~0.0 min left
+[TUNE] scoring 64 settings (mAP on fold A | fold B | all)
+  [  1/64] 1x                   NMS 0.50             thr 0.02  0.1365 | 0.2415 | 0.1822  (1.00x)
+  [  2/64] 1x                   NMS 0.60             thr 0.02  0.1367 | 0.2412 | 0.1822  (1.00x)
+  [  3/64] 1x                   NMS 0.70             thr 0.02  0.1369 | 0.2397 | 0.1818  (1.00x)
+  [  4/64] 1x                   Matrix-NMS s=2       thr 0.02  0.1377 | 0.2434 | 0.1839  (1.00x)
+  [  5/64] 1x                   NMS 0.50             thr 0.05  0.1364 | 0.2415 | 0.1822  (1.00x)
+  [  6/64] 1x                   NMS 0.60             thr 0.05  0.1367 | 0.2412 | 0.1822  (1.00x)
+  [  7/64] 1x                   NMS 0.70             thr 0.05  0.1369 | 0.2397 | 0.1818  (1.00x)
+  [  8/64] 1x                   Matrix-NMS s=2       thr 0.05  0.1377 | 0.2434 | 0.1838  (1.00x)
+  [  9/64] 1x +flip             NMS 0.50             thr 0.02  0.1420 | 0.2481 | 0.1857  (2.00x)
+  [ 10/64] 1x +flip             NMS 0.60             thr 0.02  0.1427 | 0.2483 | 0.1862  (2.00x)
+  [ 11/64] 1x +flip             NMS 0.70             thr 0.02  0.1427 | 0.2468 | 0.1855  (2.00x)
+  [ 12/64] 1x +flip             Matrix-NMS s=2       thr 0.02  0.1432 | 0.2511 | 0.1877  (2.00x)
+  [ 13/64] 1x +flip             NMS 0.50             thr 0.05  0.1420 | 0.2481 | 0.1857  (2.00x)
+  [ 14/64] 1x +flip             NMS 0.60             thr 0.05  0.1427 | 0.2483 | 0.1862  (2.00x)
+  [ 15/64] 1x +flip             NMS 0.70             thr 0.05  0.1427 | 0.2468 | 0.1855  (2.00x)
+  [ 16/64] 1x +flip             Matrix-NMS s=2       thr 0.05  0.1432 | 0.2511 | 0.1877  (2.00x)
+  [ 17/64] 1x+1.25x             NMS 0.50             thr 0.02  0.1424 | 0.2335 | 0.1781  (2.56x)
+  [ 18/64] 1x+1.25x             NMS 0.60             thr 0.02  0.1433 | 0.2332 | 0.1784  (2.56x)
+  [ 19/64] 1x+1.25x             NMS 0.70             thr 0.02  0.1441 | 0.2316 | 0.1780  (2.56x)
+  [ 20/64] 1x+1.25x             Matrix-NMS s=2       thr 0.02  0.1443 | 0.2364 | 0.1805  (2.56x)
+  [ 21/64] 1x+1.25x             NMS 0.50             thr 0.05  0.1424 | 0.2335 | 0.1781  (2.56x)
+  [ 22/64] 1x+1.25x             NMS 0.60             thr 0.05  0.1433 | 0.2332 | 0.1784  (2.56x)
+  [ 23/64] 1x+1.25x             NMS 0.70             thr 0.05  0.1441 | 0.2316 | 0.1780  (2.56x)
+  [ 24/64] 1x+1.25x             Matrix-NMS s=2       thr 0.05  0.1443 | 0.2364 | 0.1805  (2.56x)
+  [ 25/64] 1x+1.25x +flip       NMS 0.50             thr 0.02  0.1458 | 0.2534 | 0.1883  (5.12x)
+  [ 26/64] 1x+1.25x +flip       NMS 0.60             thr 0.02  0.1472 | 0.2536 | 0.1892  (5.12x)
+  [ 27/64] 1x+1.25x +flip       NMS 0.70             thr 0.02  0.1472 | 0.2517 | 0.1869  (5.12x)
+  [ 28/64] 1x+1.25x +flip       Matrix-NMS s=2       thr 0.02  0.1471 | 0.2567 | 0.1905  (5.12x)
+  [ 29/64] 1x+1.25x +flip       NMS 0.50             thr 0.05  0.1458 | 0.2534 | 0.1883  (5.12x)
+  [ 30/64] 1x+1.25x +flip       NMS 0.60             thr 0.05  0.1472 | 0.2536 | 0.1892  (5.12x)
+  [ 31/64] 1x+1.25x +flip       NMS 0.70             thr 0.05  0.1472 | 0.2517 | 0.1869  (5.12x)
+  [ 32/64] 1x+1.25x +flip       Matrix-NMS s=2       thr 0.05  0.1471 | 0.2567 | 0.1905  (5.12x)
+  [ 33/64] 1x+1.5x              NMS 0.50             thr 0.02  0.1434 | 0.2240 | 0.1771  (3.25x)
+  [ 34/64] 1x+1.5x              NMS 0.60             thr 0.02  0.1448 | 0.2242 | 0.1778  (3.25x)
+  [ 35/64] 1x+1.5x              NMS 0.70             thr 0.02  0.1455 | 0.2233 | 0.1774  (3.25x)
+  [ 36/64] 1x+1.5x              Matrix-NMS s=2       thr 0.02  0.1457 | 0.2272 | 0.1799  (3.25x)
+  [ 37/64] 1x+1.5x              NMS 0.50             thr 0.05  0.1434 | 0.2240 | 0.1771  (3.25x)
+  [ 38/64] 1x+1.5x              NMS 0.60             thr 0.05  0.1448 | 0.2242 | 0.1778  (3.25x)
+  [ 39/64] 1x+1.5x              NMS 0.70             thr 0.05  0.1455 | 0.2233 | 0.1774  (3.25x)
+  [ 40/64] 1x+1.5x              Matrix-NMS s=2       thr 0.05  0.1457 | 0.2272 | 0.1799  (3.25x)
+  [ 41/64] 1x+1.5x +flip        NMS 0.50             thr 0.02  0.1429 | 0.2477 | 0.1851  (6.50x)
+  [ 42/64] 1x+1.5x +flip        NMS 0.60             thr 0.02  0.1443 | 0.2479 | 0.1847  (6.50x)
+  [ 43/64] 1x+1.5x +flip        NMS 0.70             thr 0.02  0.1441 | 0.2464 | 0.1824  (6.50x)
+  [ 44/64] 1x+1.5x +flip        Matrix-NMS s=2       thr 0.02  0.1444 | 0.2508 | 0.1873  (6.50x)
+  [ 45/64] 1x+1.5x +flip        NMS 0.50             thr 0.05  0.1429 | 0.2477 | 0.1851  (6.50x)
+  [ 46/64] 1x+1.5x +flip        NMS 0.60             thr 0.05  0.1443 | 0.2479 | 0.1847  (6.50x)
+  [ 47/64] 1x+1.5x +flip        NMS 0.70             thr 0.05  0.1441 | 0.2464 | 0.1824  (6.50x)
+  [ 48/64] 1x+1.5x +flip        Matrix-NMS s=2       thr 0.05  0.1444 | 0.2508 | 0.1873  (6.50x)
+  [ 49/64] 1x+1.25x+1.5x        NMS 0.50             thr 0.02  0.1455 | 0.2274 | 0.1771  (4.81x)
+  [ 50/64] 1x+1.25x+1.5x        NMS 0.60             thr 0.02  0.1468 | 0.2274 | 0.1777  (4.81x)
+  [ 51/64] 1x+1.25x+1.5x        NMS 0.70             thr 0.02  0.1477 | 0.2261 | 0.1772  (4.81x)
+  [ 52/64] 1x+1.25x+1.5x        Matrix-NMS s=2       thr 0.02  0.1474 | 0.2305 | 0.1797  (4.81x)
+  [ 53/64] 1x+1.25x+1.5x        NMS 0.50             thr 0.05  0.1455 | 0.2274 | 0.1771  (4.81x)
+  [ 54/64] 1x+1.25x+1.5x        NMS 0.60             thr 0.05  0.1468 | 0.2274 | 0.1777  (4.81x)
+  [ 55/64] 1x+1.25x+1.5x        NMS 0.70             thr 0.05  0.1477 | 0.2261 | 0.1772  (4.81x)
+  [ 56/64] 1x+1.25x+1.5x        Matrix-NMS s=2       thr 0.05  0.1474 | 0.2305 | 0.1797  (4.81x)
+  [ 57/64] 1x+1.25x+1.5x +flip  NMS 0.50             thr 0.02  0.1451 | 0.2495 | 0.1855  (9.62x)
+  [ 58/64] 1x+1.25x+1.5x +flip  NMS 0.60             thr 0.02  0.1465 | 0.2499 | 0.1857  (9.62x)
+  [ 59/64] 1x+1.25x+1.5x +flip  NMS 0.70             thr 0.02  0.1469 | 0.2482 | 0.1841  (9.62x)
+  [ 60/64] 1x+1.25x+1.5x +flip  Matrix-NMS s=2       thr 0.02  0.1458 | 0.2526 | 0.1873  (9.62x)
+  [ 61/64] 1x+1.25x+1.5x +flip  NMS 0.50             thr 0.05  0.1451 | 0.2495 | 0.1855  (9.62x)
+  [ 62/64] 1x+1.25x+1.5x +flip  NMS 0.60             thr 0.05  0.1465 | 0.2499 | 0.1857  (9.62x)
+  [ 63/64] 1x+1.25x+1.5x +flip  NMS 0.70             thr 0.05  0.1469 | 0.2482 | 0.1841  (9.62x)
+  [ 64/64] 1x+1.25x+1.5x +flip  Matrix-NMS s=2       thr 0.05  0.1458 | 0.2526 | 0.1873  (9.62x)
+
+[TUNE] top 10 settings on all tuning frames (for information only; not used for the choice)
+  1x+1.25x +flip       Matrix-NMS s=2       thr 0.02  mAP 0.1905 (+0.0083)  AP50 0.3463  cost 5.12x
+  1x+1.25x +flip       Matrix-NMS s=2       thr 0.05  mAP 0.1905 (+0.0083)  AP50 0.3463  cost 5.12x
+  1x+1.25x +flip       NMS 0.60             thr 0.02  mAP 0.1892 (+0.0070)  AP50 0.3502  cost 5.12x
+  1x+1.25x +flip       NMS 0.60             thr 0.05  mAP 0.1892 (+0.0070)  AP50 0.3502  cost 5.12x
+  1x+1.25x +flip       NMS 0.50             thr 0.02  mAP 0.1883 (+0.0060)  AP50 0.3519  cost 5.12x
+  1x+1.25x +flip       NMS 0.50             thr 0.05  mAP 0.1883 (+0.0060)  AP50 0.3519  cost 5.12x
+  1x +flip             Matrix-NMS s=2       thr 0.02  mAP 0.1877 (+0.0055)  AP50 0.3360  cost 2.00x
+  1x +flip             Matrix-NMS s=2       thr 0.05  mAP 0.1877 (+0.0055)  AP50 0.3360  cost 2.00x
+  1x+1.5x +flip        Matrix-NMS s=2       thr 0.02  mAP 0.1873 (+0.0051)  AP50 0.3467  cost 6.50x
+  1x+1.5x +flip        Matrix-NMS s=2       thr 0.05  mAP 0.1873 (+0.0051)  AP50 0.3467  cost 6.50x
+
+[TUNE] chosen on fold B, used for fold A videos: 1x+1.25x +flip       Matrix-NMS s=2       thr 0.02
+[TUNE] chosen on fold A, used for fold B videos: 1x+1.5x              Matrix-NMS s=2       thr 0.02
+[TUNE] default                 mAP 0.1822  AP50 0.3318
+[TUNE] cross-validated tuned   mAP 0.1794  AP50 0.3325  (-0.0029 mAP)  <- expected gain on the full test set
+
+[TUNE] wrote results/tune/stage4_end_tune.json
+[TUNE] wrote results/tune/stage4_end_choice.json

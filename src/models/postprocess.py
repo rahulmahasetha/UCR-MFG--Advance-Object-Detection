@@ -38,7 +38,9 @@ def postprocess(
             parts["scores"].append(scores[cand])
             parts["labels"].append(labels)
             log_var = head["log_var"][lvl][b].float().flatten(1).T[loc_idx]
-            parts["box_std"].append(reg * (torch.exp(0.5 * log_var) - 1.0))
+            # log-normal distances: log-space std is exp(s/2); first-order pixel std is d * exp(s/2).
+            # (The earlier d * (exp(s/2) - 1) was negative whenever s < 0, i.e. for almost all detections.)
+            parts["box_std"].append(reg * torch.exp(0.5 * log_var))
             parts["u_a"].append(outputs["u_a"][lvl][b].flatten()[loc_idx])
             parts["u_e"].append(outputs["u_e"][lvl][b].flatten()[loc_idx])
 

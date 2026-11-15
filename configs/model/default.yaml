@@ -1,6 +1,8 @@
 model:
   backbone: "resnet50"
   pretrained: true
+  freeze_bn: true          # batch size 2 -> keep pretrained BatchNorm statistics fixed
+  frozen_stages: 1         # freeze stem + layer1 (standard detector fine-tuning)
   fpn_channels: 256
   graph_dim: 64
   strides: [8, 16, 32]

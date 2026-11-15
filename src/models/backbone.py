@@ -10,8 +10,12 @@ class ResNetFPNBackbone(nn.Module):
     Generates feature maps P3, P4, P5 with strides 8, 16, 32 and uniform channels C = 256.
     """
 
-    def __init__(self, pretrained: bool = False, out_channels: int = 256):
+    def __init__(self, pretrained: bool = False, out_channels: int = 256, freeze_bn: bool = True, frozen_stages: int = 1):
         super().__init__()
+        # Detection batches are tiny (2 images), so BatchNorm statistics are kept frozen at their pretrained values
+        # (standard torchvision/detectron practice). frozen_stages=1 also freezes the stem + layer1 weights.
+        self.freeze_bn = freeze_bn
+        self.frozen_stages = frozen_stages
         weights = models.ResNet50_Weights.DEFAULT if pretrained else None
         resnet = models.resnet50(weights=weights)
 
@@ -40,6 +44,25 @@ class ResNetFPNBackbone(nn.Module):
         self.smooth_p3 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
         self.register_buffer("pixel_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1), persistent=False)
         self.register_buffer("pixel_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1), persistent=False)
+        frozen = [self.conv1, self.bn1, self.layer1][: 2 + self.frozen_stages] if self.frozen_stages > 0 else []
+        for module in frozen:
+            for p in module.parameters():
+                p.requires_grad_(False)
+
+    def _bn_modules(self):
+        for name in ("bn1", "layer1", "layer2", "layer3", "layer4"):
+            for m in getattr(self, name).modules():
+                if isinstance(m, nn.BatchNorm2d):
+                    yield m
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if mode and self.freeze_bn:
+            for m in self._bn_modules():
+                m.eval()
+                for p in m.parameters():
+                    p.requires_grad_(False)
+        return self
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """x: [B, 3, H, W] RGB in [0, 1]; ImageNet normalisation is applied here to match the pretrained weights."""

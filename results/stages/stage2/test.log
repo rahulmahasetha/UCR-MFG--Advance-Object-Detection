@@ -1,0 +1,81 @@
+[MODEL] /Users/rahulmahaseth/Desktop/ucr_mfg/saved_models/uavdt_ep35_mAP18.9.pth  epoch 35 stage 2  device mps  input (544, 1024)
+[TEST] 3318 test frames (stride 5), views [1.0]
+[TEST] fold A videos use: 1x                   NMS 0.60             thr 0.05
+[TEST] fold B videos use: 1x                   NMS 0.60             thr 0.05
+[TEST] 50/3318  0.6 min elapsed, ~38.8 min left
+[TEST] 100/3318  1.2 min elapsed, ~37.5 min left
+[TEST] 150/3318  1.6 min elapsed, ~34.1 min left
+[TEST] 200/3318  2.1 min elapsed, ~32.3 min left
+[TEST] 250/3318  2.5 min elapsed, ~31.0 min left
+[TEST] 300/3318  3.0 min elapsed, ~30.0 min left
+[TEST] 350/3318  3.4 min elapsed, ~29.1 min left
+[TEST] 400/3318  3.9 min elapsed, ~28.5 min left
+[TEST] 450/3318  4.4 min elapsed, ~27.8 min left
+[TEST] 500/3318  4.8 min elapsed, ~27.2 min left
+[TEST] 550/3318  5.3 min elapsed, ~26.7 min left
+[TEST] 600/3318  5.7 min elapsed, ~26.0 min left
+[TEST] 650/3318  6.2 min elapsed, ~25.3 min left
+[TEST] 700/3318  6.6 min elapsed, ~24.8 min left
+[TEST] 750/3318  7.1 min elapsed, ~24.2 min left
+[TEST] 800/3318  7.5 min elapsed, ~23.6 min left
+[TEST] 850/3318  7.9 min elapsed, ~23.1 min left
+[TEST] 900/3318  8.4 min elapsed, ~22.5 min left
+[TEST] 950/3318  8.8 min elapsed, ~21.9 min left
+[TEST] 1000/3318  9.2 min elapsed, ~21.4 min left
+[TEST] 1050/3318  9.7 min elapsed, ~20.9 min left
+[TEST] 1100/3318  10.1 min elapsed, ~20.4 min left
+[TEST] 1150/3318  10.6 min elapsed, ~20.0 min left
+[TEST] 1200/3318  11.1 min elapsed, ~19.5 min left
+[TEST] 1250/3318  11.5 min elapsed, ~19.0 min left
+[TEST] 1300/3318  11.9 min elapsed, ~18.5 min left
+[TEST] 1350/3318  12.4 min elapsed, ~18.0 min left
+[TEST] 1400/3318  12.8 min elapsed, ~17.5 min left
+[TEST] 1450/3318  13.2 min elapsed, ~17.1 min left
+[TEST] 1500/3318  13.7 min elapsed, ~16.6 min left
+[TEST] 1550/3318  14.1 min elapsed, ~16.1 min left
+[TEST] 1600/3318  14.5 min elapsed, ~15.6 min left
+[TEST] 1650/3318  15.0 min elapsed, ~15.1 min left
+[TEST] 1700/3318  15.4 min elapsed, ~14.7 min left
+[TEST] 1750/3318  15.7 min elapsed, ~14.1 min left
+[TEST] 1800/3318  16.0 min elapsed, ~13.5 min left
+[TEST] 1850/3318  16.3 min elapsed, ~12.9 min left
+[TEST] 1900/3318  16.5 min elapsed, ~12.3 min left
+[TEST] 1950/3318  16.8 min elapsed, ~11.8 min left
+[TEST] 2000/3318  17.1 min elapsed, ~11.2 min left
+[TEST] 2050/3318  17.3 min elapsed, ~10.7 min left
+[TEST] 2100/3318  17.6 min elapsed, ~10.2 min left
+[TEST] 2150/3318  17.9 min elapsed, ~9.7 min left
+[TEST] 2200/3318  18.1 min elapsed, ~9.2 min left
+[TEST] 2250/3318  18.4 min elapsed, ~8.7 min left
+[TEST] 2300/3318  18.7 min elapsed, ~8.3 min left
+[TEST] 2350/3318  18.9 min elapsed, ~7.8 min left
+[TEST] 2400/3318  19.2 min elapsed, ~7.3 min left
+[TEST] 2450/3318  19.5 min elapsed, ~6.9 min left
+[TEST] 2500/3318  19.7 min elapsed, ~6.5 min left
+[TEST] 2550/3318  20.0 min elapsed, ~6.0 min left
+[TEST] 2600/3318  20.3 min elapsed, ~5.6 min left
+[TEST] 2650/3318  20.5 min elapsed, ~5.2 min left
+[TEST] 2700/3318  20.8 min elapsed, ~4.8 min left
+[TEST] 2750/3318  21.1 min elapsed, ~4.4 min left
+[TEST] 2800/3318  21.4 min elapsed, ~4.0 min left
+[TEST] 2850/3318  21.7 min elapsed, ~3.6 min left
+[TEST] 2900/3318  22.0 min elapsed, ~3.2 min left
+[TEST] 2950/3318  22.2 min elapsed, ~2.8 min left
+[TEST] 3000/3318  22.5 min elapsed, ~2.4 min left
+[TEST] 3050/3318  22.8 min elapsed, ~2.0 min left
+[TEST] 3100/3318  23.1 min elapsed, ~1.6 min left
+[TEST] 3150/3318  23.4 min elapsed, ~1.2 min left
+[TEST] 3200/3318  23.7 min elapsed, ~0.9 min left
+[TEST] 3250/3318  23.9 min elapsed, ~0.5 min left
+[TEST] 3300/3318  24.2 min elapsed, ~0.1 min left
+[TEST] 3318/3318  24.3 min elapsed, ~0.0 min left
+
+[TEST] metric      default   tuned     change
+       mAP        0.1884    0.1884    +0.0000
+       AP50       0.3571    0.3571    +0.0000
+       AP75       0.1862    0.1862    +0.0000
+       APs        0.1194    0.1194    +0.0000
+       APm        0.2993    0.2993    +0.0000
+       APl        0.2751    0.2751    +0.0000
+       D-ECE      0.0942    0.0942    +0.0000
+[TEST] wrote results/tune/uavdt_ep35_mAP18.9_test_s5o2.json

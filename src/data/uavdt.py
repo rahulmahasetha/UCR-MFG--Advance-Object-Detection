@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from PIL import Image
 
+from src.data.augmentations import TrainAugmenter
 from src.data.dataset import BaseDataset
 from src.data.transforms import resize_and_pad, transform_boxes, transform_ignore_mask
 
@@ -38,9 +39,13 @@ class UAVDTDataset(BaseDataset):
         root_dir: str = "dataset/UAVDT-Benchmark-M",
         split: str = "test",
         img_size: Tuple[int, int] = (1024, 1024),
-        is_train: bool = False
+        is_train: bool = False,
+        frame_stride: int = 1,
     ):
         super().__init__(root_dir, split, img_size, is_train)
+        self.augmenter = TrainAugmenter() if is_train else None
+        # UAVDT is video (~30 fps): consecutive frames are near-duplicates. stride N keeps every Nth frame.
+        self.frame_stride = max(1, int(frame_stride))
         self.attr_dir = os.path.join(root_dir, "M_attr", split)
         self.images_root = os.path.join(root_dir, "UAV-benchmark-M")
         self.gt_root = os.path.join(root_dir, "UAV-benchmark-MOTD_v1.0", "GT")
@@ -95,7 +100,7 @@ class UAVDTDataset(BaseDataset):
 
             # Index available frames
             frame_files = sorted([f for f in os.listdir(seq_img_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
-            for ff in frame_files:
+            for ff in frame_files[::self.frame_stride]:
                 # Frame index usually derived from filename e.g. img000001.jpg -> 1
                 stem = os.path.splitext(ff)[0]
                 try:
@@ -148,6 +153,11 @@ class UAVDTDataset(BaseDataset):
             raw_labels = torch.empty((0,), dtype=torch.int64)
 
         ignore_mask = transform_ignore_mask(ignore_mask_orig, scale, padding, self.img_size)
+
+        if self.augmenter is not None:
+            boxes_before = boxes
+            image_tensor, boxes, ignore_mask = self.augmenter(image_tensor, boxes, ignore_mask)
+            assert boxes.shape[0] == boxes_before.shape[0]
 
         return {
             "image_id": image_id,
