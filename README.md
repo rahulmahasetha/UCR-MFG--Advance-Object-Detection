@@ -2,6 +2,8 @@
 
 An uncertainty-aware, graph-enhanced object detection architecture for aerial and drone imagery using **VisDrone2019-DET**, with zero-shot cross-domain generalization on **UAVDT**, and optional independent experiment tracks for **DOTA-v1.5** and **SODA-A**.
 
+> **Paper results:** the reported model is trained and tested on **UAVDT** (final model: 17.5 mAP, D-ECE 0.066; 18.9 mAP with TTA). Weights, results and commands are in [Section 8](#8-uavdt-paper-experiment-trained-model-and-results).
+
 ---
 
 ## 1. Research Overview & Core Contributions
@@ -356,7 +358,69 @@ python scripts/make_paper_artifacts.py            # -> paper/tables/*.md|.tex, p
 
 ---
 
-## 8. Directory Structure
+## 8. UAVDT Paper Experiment (Trained Model and Results)
+
+The IEEE paper (`paper/paper.tex`, 6-page version `paper/paper_6page.tex`) reports a model trained **on UAVDT** (813 training frames, 544x1024, batch size 2) on an Apple M5 laptop (MPS). Curriculum: stage 1 = epochs 1-20, stage 2 = 21-40, stage 3 = 41-60, stage 4 = 61-100.
+
+### Trained weights (`models/`)
+
+| File | Stage | Epoch | Test mAP | Test D-ECE |
+|---|---|---|---|---|
+| `models/stage1_ep020.pth` | 1: FCOS + C1 (re-run with final recipe) | 20 | 18.4 | 0.088 |
+| `models/stage2_ep035.pth` | 2: + fuzzy graph | 35 | 18.8 | 0.094 |
+| `models/stage3_ep060.pth` | 3: + C2 router, C3 message passing | 60 | 18.0 | 0.065 |
+| `models/stage4_ep100_final.pth` | 4: + C4 residual fusion, **final model** | 100 | 17.5 (18.9 with TTA) | 0.066 |
+
+Test set: 3,318 frames (every 5th UAVDT test frame from offset 2), single view unless noted. Final-model AUROC for separating false from true detections: Ua 0.960, Ue 0.931, box std 0.975, 1-score 0.970. See `models/README.md` for where each file came from.
+
+### Where things are
+
+| Folder | Content |
+|---|---|
+| `models/` | One weights file per curriculum stage (used in the paper) |
+| `results/final_model/` | Final model: TTA search (`stage4_end_tune*`), chosen setting (`stage4_end_choice.json`), test results single view (`test_single_view.*`) and with TTA (`test_tta.*`) |
+| `results/stages/stage1..3/` | `test.json` + `test.log` for the earlier stages |
+| `results/demo/` | Single-image demo pictures |
+| `checkpoints/<run>/` | Each training run with its logs: `train_log.jsonl` (per-epoch losses, monitoring mAP/D-ECE), `stdout.log`, `spikes.jsonl`, `epoch_*.pth`, `latest.pth` |
+| `paper/` | LaTeX sources and `figures/qualitative.png` |
+
+Training runs in `checkpoints/`:
+- `uavdt_primary/` - epochs 1-75 (stages 1-3; the stage-4 attempt with the convex gate is in its log)
+- `uavdt_stage4_frozen/` - stage 4 with convex gate and frozen detector (failed design, reported in Table V)
+- `uavdt_stage4_residual/` - final stage 4 (epochs 61-100) with residual fusion, resumed from `saved_models/uavdt_ep54_before_collapse.pth`
+- `uavdt_stage1_rerun/` - stage 1 re-trained (epochs 1-20) to obtain the stage-1 test row
+
+### Commands
+
+```bash
+# Train (UAVDT curriculum); resume after Ctrl+C with --resume latest
+python scripts/train.py --config configs/experiments/uavdt_primary.yaml
+python scripts/train.py --config configs/experiments/uavdt_stage4_residual.yaml \
+  --resume saved_models/uavdt_ep54_before_collapse.pth
+python scripts/check_plateau.py --log checkpoints/uavdt_stage4_residual/train_log.jsonl
+
+# Evaluate on the 3,318 test frames (single view / with the tuned TTA setting)
+python scripts/tune_inference.py test --weights models/stage4_ep100_final.pth \
+  --choice results/final_model/single_view_choice.json --stride 5 --offset 2
+python scripts/tune_inference.py test --weights models/stage4_ep100_final.pth \
+  --choice results/final_model/stage4_end_choice.json --stride 5 --offset 2
+
+# Re-tune TTA on the 554 tuning frames (disjoint from the test frames)
+python scripts/tune_inference.py tune --weights models/stage4_ep100_final.pth --out-dir results/final_model
+
+# Single image: a test frame by index, or any picture -> results/demo/
+python scripts/demo_image.py --index 2
+python scripts/demo_image.py --image path/to/photo.jpg
+
+# Paper Fig. 3 (single view vs TTA; daylight / night / fog / high altitude)
+python scripts/make_qualitative.py --frames M0403_img000169 M1001_img000202 M1009_img000295 auto \
+  --both --candidates 20 --sequences M0701
+```
+
+---
+
+## 9. Directory Structure
+
 
 ```
 ucr_mfg/
@@ -368,11 +432,16 @@ ucr_mfg/
 │   │   └── soda_a.yaml
 │   ├── experiments/
 │   │   ├── visdrone_primary.yaml
+│   │   ├── uavdt_primary.yaml          # UAVDT curriculum (paper)
+│   │   ├── uavdt_stage4_residual.yaml  # final stage 4, residual fusion
+│   │   ├── uavdt_stage4_frozen.yaml    # stage 4, convex gate (failed design)
+│   │   ├── uavdt_stage1_rerun.yaml     # stage-1 re-run for the test row
 │   │   ├── uavdt_zeroshot.yaml
 │   │   ├── dota_independent.yaml
 │   │   └── soda_independent.yaml
 │   └── model/
-│       └── default.yaml
+│       ├── default.yaml
+│       └── residual.yaml       # residual fusion Z = F + (1-lambda)H
 ├── dataset/                    # Local dataset folder (symlinked or downloaded)
 ├── src/
 │   ├── data/
@@ -414,7 +483,19 @@ ucr_mfg/
 │   ├── train.py                # 4-stage training script with resume support
 │   ├── eval.py                 # Evaluation script for VisDrone, UAVDT, DOTA
 │   ├── validate_data.py        # CLI dataset integrity audit tool
-│   └── oracle_router_pilot.py  # Diagnostic GT-instance upper bound
+│   ├── oracle_router_pilot.py  # Diagnostic GT-instance upper bound
+│   ├── tune_inference.py       # UAVDT test evaluation + TTA tuning
+│   ├── demo_image.py           # Detections + uncertainty on one image
+│   ├── make_qualitative.py     # Paper Fig. 3
+│   └── check_plateau.py        # Summarise train_log.jsonl, flag plateaus
+├── models/                     # Final weights, one per curriculum stage (git-ignored .pth)
+├── checkpoints/                # Training runs with their logs (git-ignored)
+├── saved_models/               # Resume point uavdt_ep54_before_collapse.pth
+├── results/
+│   ├── final_model/            # TTA tuning + test results of the final model
+│   ├── stages/                 # Test results of stages 1-3
+│   └── demo/                   # Demo pictures
+├── paper/                      # LaTeX sources (paper.tex, paper_6page.tex) and figures
 ├── tests/                      # Automated test suite
 ├── pyproject.toml              # Project metadata & pytest configuration
 ├── requirements.txt            # Python dependencies
