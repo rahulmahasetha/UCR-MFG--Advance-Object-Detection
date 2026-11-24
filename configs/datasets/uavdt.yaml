@@ -19,8 +19,8 @@ classes:
     5: 0  # van -> car
     6: 1  # truck -> truck
     9: 2  # bus -> bus
-image_size: [1024, 1024]
+image_size: [544, 1024]   # (H, W) native 1024x540 frames; same canvas as training (eval.py reads this)
 evaluation:
-  metric: "mAP@0.5"
+  metric: "mAP@[.5:.95]"   # COCO-style, as reported in the paper (AP50 also reported)
   max_dets: 500
 

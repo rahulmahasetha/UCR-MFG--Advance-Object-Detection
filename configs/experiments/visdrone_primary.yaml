@@ -21,11 +21,11 @@ train:
       losses: ["det", "unc", "graph"]
     stage_3:
       epochs: [61, 90]
-      active_modules: ["router"]
+      active_modules: ["router", "mpnn"]   # C2 + C3, fixed residual Z = F + 0.1 H
       losses: ["det", "unc", "graph", "inst", "benefit"]
     stage_4:
       epochs: [91, 150]
-      active_modules: ["mpnn", "fusion"]
+      active_modules: ["fusion"]          # C4 gate replaces the fixed 0.1
       losses: ["all"]
 val:
   interval: 1   # validate every epoch -> best.pth + val metrics in train_log.jsonl

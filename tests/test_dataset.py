@@ -10,7 +10,6 @@ from src.data.augmentations import TrainAugmenter
 from src.data.collate import collate_fn
 from src.data.visdrone import VisDroneDataset
 from src.data.uavdt import UAVDTDataset
-from src.data.dota import DOTADataset
 
 
 def test_transforms_resize_and_pad():
@@ -82,14 +81,4 @@ def test_collate_fn():
     assert len(collated["boxes"]) == 2
     assert len(collated["labels"]) == 2
     assert collated["image_ids"] == ["test_1", "test_2"]
-
-
-def test_dota_obb_to_hbb():
-    # 4 corners of an oriented rectangle
-    coords = [10.0, 20.0, 50.0, 10.0, 60.0, 40.0, 20.0, 50.0]
-    xmin, ymin, xmax, ymax = DOTADataset.obb_to_hbb(coords)
-    assert xmin == 10.0
-    assert ymin == 10.0
-    assert xmax == 60.0
-    assert ymax == 50.0
 

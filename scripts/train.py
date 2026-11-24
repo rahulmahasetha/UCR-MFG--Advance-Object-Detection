@@ -17,7 +17,6 @@ import yaml
 from torch.utils.data import DataLoader, Subset
 
 from src.data.collate import collate_fn
-from src.data.dota import DOTADataset
 from src.data.resumable import ResumableEpochSampler, SeededDataset
 from src.data.uavdt import UAVDTDataset
 from src.data.visdrone import VisDroneDataset
@@ -262,9 +261,6 @@ def main():
         # UAVDT has only official train/test sequence splits; validation uses (strided) test sequences.
         train_set = UAVDTDataset(root, "train", img_size, is_train=True, frame_stride=train_cfg.get("frame_stride", 1))
         val_set = UAVDTDataset(root, "test", img_size, is_train=False, frame_stride=val_cfg.get("frame_stride", 1))
-    elif ds_cfg["dataset_name"] == "DOTA-v1.5":
-        train_set = DOTADataset(root, "train", img_size, is_train=True)
-        val_set = DOTADataset(root, "validation", img_size, is_train=False)
     else:
         train_set = VisDroneDataset(root, "train", img_size, is_train=True)
         val_set = VisDroneDataset(root, "val", img_size, is_train=False)

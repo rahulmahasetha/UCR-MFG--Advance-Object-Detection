@@ -11,15 +11,14 @@ import yaml
 from torch.utils.data import DataLoader, Subset
 
 from src.data.collate import collate_fn
-from src.data.dota import DOTADataset
 from src.data.uavdt import UAVDTDataset
 from src.data.visdrone import VisDroneDataset
 from src.engine import predict, summarize
 from src.models.ucr_mfg import UCRMFG
 
-DATASETS = {"VisDrone2019-DET": VisDroneDataset, "UAVDT": UAVDTDataset, "DOTA-v1.5": DOTADataset}
+DATASETS = {"VisDrone2019-DET": VisDroneDataset, "UAVDT": UAVDTDataset}
 DEFAULT_INFERENCE = {"score_thresh": 0.05, "pre_nms_topk": 1000, "nms_iou": 0.6, "max_dets": 500}
-SHORT_NAMES = {"VisDrone2019-DET": "visdrone", "UAVDT": "uavdt", "DOTA-v1.5": "dota"}
+SHORT_NAMES = {"VisDrone2019-DET": "visdrone", "UAVDT": "uavdt"}
 
 
 class UnusableCheckpointError(RuntimeError):
@@ -50,7 +49,9 @@ def load_trained_model(weights: str, device: torch.device) -> Tuple[UCRMFG, Dict
             "evaluated reliably. Retrain with scripts/train.py."
         )
     num_classes = cfg["dataset"]["classes"]["num_classes"]
-    model = UCRMFG.from_config(cfg["model"], num_classes).to(device)
+    # every weight comes from the checkpoint, so skip the ImageNet download (works offline)
+    model_cfg = {**cfg["model"], "model": {**cfg["model"]["model"], "pretrained": False}}
+    model = UCRMFG.from_config(model_cfg, num_classes).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.set_curriculum_stage(ckpt.get("current_stage", 4))
     exp = cfg["experiment"]

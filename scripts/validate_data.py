@@ -5,7 +5,6 @@ import argparse
 import yaml
 from src.data.visdrone import VisDroneDataset
 from src.data.uavdt import UAVDTDataset
-from src.data.dota import DOTADataset
 from src.data.validation import DataValidator
 
 
@@ -32,8 +31,6 @@ def main():
         ds = VisDroneDataset(root_dir=root_dir, split=args.split, img_size=img_size, is_train=(args.split == "train"))
     elif ds_name == "UAVDT":
         ds = UAVDTDataset(root_dir=root_dir, split=args.split, img_size=img_size, is_train=(args.split == "train"))
-    elif ds_name == "DOTA-v1.5":
-        ds = DOTADataset(root_dir=root_dir, split=args.split, img_size=img_size, is_train=(args.split == "train"))
     else:
         raise ValueError(f"Unknown dataset {ds_name}")
 

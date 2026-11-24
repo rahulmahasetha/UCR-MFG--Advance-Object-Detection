@@ -1,504 +1,437 @@
-# UCR-MFG: Uncertainty-Conditioned Relational Routing for Multi-Scale Fuzzy Graph Object Detection
+# UCR-MFG: Uncertainty-Conditioned Relational Routing over Multi-Scale Fuzzy Graphs for Object Detection in Drone Imagery
 
-An uncertainty-aware, graph-enhanced object detection architecture for aerial and drone imagery using **VisDrone2019-DET**, with zero-shot cross-domain generalization on **UAVDT**, and optional independent experiment tracks for **DOTA-v1.5** and **SODA-A**.
+UCR-MFG is an anchor-free (FCOS) detector for drone imagery. It first measures its own uncertainty at every pyramid location and then uses that uncertainty to decide where relational context is needed. Each detection is returned with an aleatoric uncertainty ($U_a$), an epistemic uncertainty ($U_e$) and a per-side box standard deviation.
 
-> **Paper results:** the reported model is trained and tested on **UAVDT** (final model: 17.5 mAP, D-ECE 0.066; 18.9 mAP with TTA). Weights, results and commands are in [Section 8](#8-uavdt-paper-experiment-trained-model-and-results).
-
----
-
-## 1. Research Overview & Core Contributions
-
-UCR-MFG addresses high visual ambiguity, extreme scale variation, and dense object clusters in low-altitude aerial imagery through four research-grade components:
-
-- **C1: Dual Predictive Uncertainty Modeling (`src/models/uncertainty_head.py`)**
-  - **Aleatoric Uncertainty ($U^a \in [0, 1]$):** Expected entropy over $T$ MC-dropout passes, $\mathbb{E}_t[H(p_t)]$, blended with a centerness-weighted box variance.
-  - **Epistemic Uncertainty ($U^e \in [0, 1]$):** Mutual information $H(\mathbb{E}_t[p_t]) - \mathbb{E}_t[H(p_t)]$ from Monte Carlo inverted dropout ($T=10$) with reproducible per-batch generators.
-  - Every detection is returned with its $U^a$, $U^e$ and a box standard deviation from the probabilistic head (log-normal box model).
-- **C2: Uncertainty-Conditioned Relational Routing (`src/models/router.py`)**
-  - Scores every candidate edge from a 140-d descriptor (receiver/sender features, Student-t affinity, $U^a$/$U^e$ of both ends, geometry, edge type).
-  - Vectorised per-receiver, per-type Straight-Through Top-K whose budget grows with receiver uncertainty.
-  - Supervised by weak instance BCE ($L_{\text{inst}}$) and benefit distillation ($L_{\text{benefit}}$): every `benefit_step_interval` steps a dense pass measures $b_{ij} = -\partial L_{\text{det}} / \partial m_{ij}$ for all candidates.
-- **C3: Benefit-Aware Multi-Scale Message Passing (`src/models/message_passing.py`)**
-  - Masked attention plus a benefit gate $g_{ij} = \sigma(f(h_i, v_j, s_{ij}, U^a_i, U^e_i, U^e_j))$ over routed edges only, a GRU node update in 64-d and expansion back to $C=256$.
-  - Cross-scale edges link every fine location to its parent and every parent to all four children.
-  - Regularized by object-centric cross-scale prediction KL consistency ($L_{\text{consistency}}$) with collision resolution and NaN-safe autograd protection.
-- **C4: Uncertainty-Aware Feature Fusion (`src/models/fusion.py`)**
-  - Channel-wise gate $\boldsymbol{\lambda}_i \in (0, 1)^{256}$ predicted from $[F, H, U^a, U^e]$, initialised to favour the visual features.
+> **Paper results** (`paper/paper_6page.tex`). The model is trained and tested on **UAVDT** (3,318 test frames):
+> - Without TTA: **17.5 mAP**, D-ECE 0.066.
+> - With TTA: **18.9 mAP**.
+> - AUROC of $U_a$ for separating false from true detections: **0.960**.
+>
+> The weights, results and commands are in [Section 7](#7-reproducing-the-paper-uavdt).
 
 ---
 
-## 2. Working Architecture & Dataflow Diagrams
+## 1. Core Contributions
 
-### Diagram 1: Full System Forward Pass & Module Interactions
+- **C1: Pre-graph dual uncertainty head** (`src/models/uncertainty_head.py`)
+  - Reads the detached FPN features $\mathrm{sg}(F_l)$ through a tower of two 3x3 convolutions with GroupNorm and SiLU.
+  - Predicts class logits, centerness and a 4-sided box log-variance.
+  - **Epistemic** $U_e$: normalised mutual information $\big(H(\bar p) - \overline{H}\big)/\log K$ over $T=10$ Monte Carlo inverted-dropout passes ($p=0.2$) with a seeded generator.
+  - **Aleatoric** $U_a$: $\tfrac12\,\overline{H}/\log K + \tfrac12\,c\,v/(\sigma_0^2+v)$.
+  - In stage 1 the dropout passes are skipped and $U_e = 0$.
+- **C2: Uncertainty-conditioned router** (`src/models/router.py`)
+  - Scores every candidate edge from a 140-d descriptor $[h_i, h_j, k_{ij}, U_a^i, U_e^i, U_a^j, U_e^j, g_{ij}, e_\tau]$: 64 + 64 + 1 + 4 + 3 + a 4-d type embedding.
+  - Keeps a per-receiver, per-type top-K with budget $K_{i,\tau} = K_\tau + \mathrm{round}(2\max(U_a^i, U_e^i))$, where $(K_\text{local}, K_\text{kNN}, K_\text{td}, K_\text{bu}) = (4, 2, 2, 2)$.
+  - A straight-through mask keeps the selection differentiable.
+  - Supervised by an instance prior ($L_\text{inst}$) and by benefit distillation ($L_\text{benefit}$). Every 2nd batch, a dense pass measures $b_{ij} = -\partial L_\text{det}/\partial m_{ij}$ for all candidates; edges in the top quartile of positive benefits become router targets.
+- **C3: Benefit-aware message passing** (`src/models/message_passing.py`)
+  - Masked additive attention and a benefit gate $\beta_{ij} = \sigma(q_r^\top h_i + q_m^\top v_j + q_e^\top[s_{ij}, U_a^i, U_e^i, U_e^j])$ over the routed edges.
+  - GRU node update in 64-d, then Linear + LayerNorm back to 256 channels, giving the graph features $H_l$.
+- **C4: Residual uncertainty fusion gate** (`src/models/fusion.py`)
+  - $Z_l = F_l + (1-\lambda_l)\odot H_l$, with $\lambda_l = \sigma(\phi([F_l, H_l, U_a, U_e]))$.
+  - $\phi$ is two 1x1 convolutions (514 → 256 → 256) with GroupNorm and SiLU.
+  - The last layer starts at zero weights and bias $\ln 9$, so stage 4 starts exactly at the stage-3 input $F + 0.1H$.
+  - The convex gate $\lambda F + (1-\lambda) H$ (`mode: gate`) is kept as an ablation; it degraded training in stage 4.
+
+---
+
+## 2. Architecture & Dataflow
+
+### Diagram 1: Forward pass
 ```mermaid
 flowchart TD
-    subgraph INPUT["Input Pipeline"]
-        IMG["Input Aerial Image\n[B x 3 x H x W]"]
-    end
+    IMG["Input image<br/>resize + pad (grey 114) to 544x1024"] --> BB["ResNet-50 + FPN<br/>P3-P5, strides 8/16/32, 256 ch<br/>(COCO FCOS init; BN, stem, layer1 frozen)"]
+    BB --> F["Pyramid features F_l"]
 
-    subgraph BACKBONE["Multi-Scale Feature Extractor"]
-        BB["ResNet-50 + FPN Backbone\n(Strides 8, 16, 32; Channels C = 256)"]
-        F1["F1 (stride 8): B x 256 x H/8 x W/8\n[Small Objects / Fine Scale]"]
-        F2["F2 (stride 16): B x 256 x H/16 x W/16\n[Medium Objects]"]
-        F3["F3 (stride 32): B x 256 x H/32 x W/32\n[Large Objects / Context]"]
-    end
+    F -->|"sg(F_l)"| UH["C1: pre-graph uncertainty head<br/>2-conv tower, GN + SiLU<br/>MC dropout T=10, p=0.2"]
+    UH --> U["Ua, Ue maps in [0, 1]"]
 
-    subgraph C1["Contribution 1: Decoupled Uncertainty Estimation"]
-        UH["Pre-Graph Uncertainty Head\n(2-Conv Shared Tower: GN + SiLU)"]
-        UA["Ua: Aleatoric Uncertainty ∈ [0, 1]\nNorm Entropy + c_pre · Var / (σ0² + Var)"]
-        UE["Ue: Epistemic Uncertainty ∈ [0, 1]\nMonte Carlo Inverted Dropout (T=10)\nMutual Information: I(y; W | x)"]
-    end
+    F --> PROJ["Node embedding h_i = LN(W F(i)), 64-d"]
+    PROJ --> GB["Fuzzy candidate graph<br/>local 5x5 window | feature kNN (k=8, 32x32 blocks)<br/>top-down + bottom-up parent/child links<br/>Student-t kernel k_ij (alpha=1)"]
 
-    subgraph GRAPH_BUILD["Multi-Scale Fuzzy Graph Construction"]
-        PROJ["Linear Projection & LayerNorm\n(256-d → 64-d)"]
-        GB["Candidate Graph Builder\n• Spatial Block Partitioning (16x16)\n• Local Spatial Window (r=3)\n• Heavy-tailed Student-t kNN (ν=1)\n• Cross-Scale Top-Down & Bottom-Up"]
-        CAND["Candidate Graph G = (V, E, W)\n(Nodes in 64-d, Unnormalized kij)"]
-    end
+    GB --> RT["C2: router<br/>140-d edge descriptor -> MLP score s_ij<br/>per-type top-K, budget K + round(2 max(Ua,Ue))<br/>straight-through mask m_ij"]
+    U -.-> RT
+    RT --> MP["C3: message passing (64-d)<br/>masked attention x benefit gate<br/>GRU update -> Linear+LN to 256-d = H_l"]
+    U -.-> MP
 
-    subgraph C2["Contribution 2: Relational Routing"]
-        DESC["140-d Edge Feature Descriptor\n[hi, hj, kij, Ua_i, Ue_i, Ua_j, Ue_j, Δx, Δy, ||Δx||, type]"]
-        ROUTER["UCRouter MLP (gθ)\nEdge Logits sij"]
-        TOPK["Straight-Through Top-K Mask mij\n• Adaptive Budget: K(Ue)\n• Forward: Hard Binary {0, 1}\n• Backward: Surrogate Sigmoid σ(sij)"]
-    end
+    MP --> FU["C4: fusion<br/>stage 3: Z = F + 0.1 H<br/>stage 4: Z = F + (1 - lambda) * H"]
+    F --> FU
+    U -.-> FU
 
-    subgraph C3["Contribution 3: Benefit-Aware Message Passing"]
-        MPNN["BenefitAwareMPNN (in 64-d space)\n• Masked Edge Attention (· mij)\n• Benefit Gate: g_ij = σ(f(hi, vj, sij, U))\n• GRU Temporal Node State Update"]
-        EXP["Linear Expansion & Residual\n(64-d → 256-d) + Visual Features Fi"]
-        HFEAT["Graph-Enhanced Features\n[H1, H2, H3] ∈ R^(B x 256 x Hk x Wk)"]
-    end
-
-    subgraph C4["Contribution 4: Uncertainty Feature Fusion"]
-        GATE["Uncertainty-Aware Fusion Gate (fφ)\nChannel-wise λi = σ(Linear514→256([Fi || Hi || Ua || Ue]))"]
-        FUSED["Fused Features Zi\nZi = λi ⊙ Fi + (1 - λi) ⊙ Hi"]
-    end
-
-    subgraph DET["Detection & Uncertainty Output"]
-        HEAD["Probabilistic FCOS Detection Head\n• Decoupled Cls Tower (Focal Loss)\n• Box Reg Tower (CIoU + Log-Normal Var)\n• Centerness Tower (BCE Loss)"]
-        POST["Post-Processing (Batched NMS)\n• Bounding Boxes & Object Classes\n• Per-detection Box Standard Deviation (px)\n• Calibrated Aleatoric (Ua) & Epistemic (Ue)\n• Expected Calibration Error (D-ECE)"]
-    end
-
-    %% Edge connections
-    IMG --> BB
-    BB --> F1 & F2 & F3
-
-    F1 & F2 & F3 --> UH
-    UH --> UA & UE
-
-    F1 & F2 & F3 --> PROJ
-    PROJ --> GB
-    UA & UE -.->|Uncertainty Conditioning| GB
-    GB --> CAND
-
-    CAND --> DESC
-    UA & UE -.->|Node Uncertainties| DESC
-    DESC --> ROUTER
-    ROUTER --> TOPK
-
-    CAND --> MPNN
-    TOPK -->|Gated Sparse Edges| MPNN
-    MPNN --> EXP
-    EXP --> HFEAT
-
-    F1 & F2 & F3 --> GATE
-    HFEAT --> GATE
-    UA & UE -.->|Confidence Weights| GATE
-    GATE --> FUSED
-
-    FUSED --> HEAD
-    HEAD --> POST
+    FU --> HEAD["FCOS head<br/>cls, ltrb, centerness, box log-variance"]
+    HEAD --> POST["score = sqrt(cls x ctr) > 0.05, top-1000 per level<br/>class-wise NMS 0.6, max 500<br/>each detection: box, score, box std, Ua, Ue"]
+    HEAD -.->|"benefit b_ij = -dL_det/dm_ij"| RT
 ```
 
-### Diagram 2: Straight-Through Top-K Routing & Benefit Distillation Flow
+### Diagram 2: Straight-through routing & benefit distillation
 ```mermaid
 flowchart LR
-    subgraph FORWARD["Forward Pass (Discrete Top-K Selection)"]
+    subgraph FORWARD["Forward"]
         direction TB
-        E_IN["140-d Edge Tensor e_ij"] --> MLP["Router MLP gθ"]
-        MLP --> S_LOGIT["Edge Logit s_ij"]
-        S_LOGIT --> TOPK_OP["Top-K Operator (Budget K)"]
-        TOPK_OP --> HARD_M["Hard Binary Mask m_ij ∈ {0, 1}"]
-        HARD_M --> MP_AGG["Message Aggregation:\nm_ij · α_ij · g_ij · W_v h_j"]
-        MP_AGG --> GRU_NODE["GRU Node Update (64-d)"]
+        E_IN["140-d edge descriptor x_ij"] --> MLP["Router MLP"]
+        MLP --> S["Edge score s_ij"]
+        S --> TOPK["Per-receiver, per-type top-K"]
+        TOPK --> M["m_ij = 1[selected] + sigma(s_ij) - sg(sigma(s_ij))"]
+        M --> AGG["Attention softmax weighted by m_ij,<br/>scaled by benefit gate beta_ij"]
+        AGG --> GRU["GRU node update (64-d)"]
     end
-
-    subgraph BACKWARD["Backward Pass (Surrogate Gradient & Distillation)"]
+    subgraph BACKWARD["Backward"]
         direction BT
-        L_DET["Detection Loss L_det"] -.->|"∂L / ∂h"| GRU_NODE
-        GRU_NODE -.->|"∂L / ∂m"| MP_AGG
-        MP_AGG -.->|"Straight-Through: ∂m_ij / ∂s_ij ≈ σ'(s_ij)"| S_LOGIT
-        S_LOGIT -.->|"Non-Zero Router Gradients"| MLP
-        L_DET -.->|"Every M_benefit Steps:\nb_ij = -∂L_det / ∂m_ij"| DISTILL["Benefit Distillation Loss (L_benefit)"]
-        DISTILL -.->|"Supervises Router"| MLP
+        LDET["Detection loss L_det"] -.-> GRU
+        GRU -.->|"dL/dm_ij"| AGG
+        AGG -.->|"straight-through: dm/ds = sigma'(s)"| S
+        LDET -.->|"every 2nd batch, all candidates:<br/>b_ij = -dL_det/dm_ij"| DIST["L_benefit: top-quartile positive b_ij are targets"]
+        DIST -.-> MLP
     end
 ```
 
-### Diagram 3: 4-Stage Progressive Curriculum & Loss Schedule
+### Diagram 3: UAVDT training curriculum (100 epochs)
 ```mermaid
 flowchart TD
-    S1["Stage 1: Base Detector & Uncertainty (Epochs 1–30)\n• Train: ResNet-50 + FPN, PreGraphUncertaintyHead, DetectionHead\n• Bypassed: Graph construction & routing\n• Objective: L_det + λ_u · L_u"]
-    S2["Stage 2: Fuzzy Graph Regularization (Epochs 31–60)\n• Activate: MultiScaleGraphBuilder\n• Objective: L_det + λ_u · L_u + λ_g · L_graph (Dirichlet Laplacian)"]
-    S3["Stage 3: Relational Routing & Message Passing (Epochs 61–90)\n• Activate: UCRouter & BenefitAwareMPNN\n• Fusion: Fixed residual (F + 0.1 H) to provide detection gradients\n• Objective: Stage 2 + λ_inst · L_inst + λ_benefit · L_benefit"]
-    S4["Stage 4: Full End-to-End System (Epochs 91–150)\n• Activate: UncertaintyFusionGate (Channel-wise λi)\n• Objective: Stage 3 + λ_consistency · L_consistency\n• Scheduler: Cosine Annealing to 1e-6"]
-
-    S1 -->|Epoch 31| S2
-    S2 -->|Epoch 61| S3
-    S3 -->|Epoch 91| S4
+    S1["Stage 1 (epochs 1-20): backbone + FPN, C1, FCOS head<br/>L_det + 0.5 L_var + 0.5 L_u"]
+    S2["Stage 2 (epochs 21-40): + fuzzy graph (training only), MC dropout on<br/>+ 0.1 L_graph (Dirichlet energy)"]
+    S3["Stage 3 (epochs 41-60): + C2 router and C3 message passing, Z = F + 0.1 H<br/>+ 0.2 L_inst + 0.2 L_benefit"]
+    S4["Stage 4 (epochs 61-100): + C4 residual fusion gate<br/>backbone and FCOS head frozen; L_consistency off (lambda_c = 0)<br/>stage guard: rollback if monitoring mAP drops > 0.003"]
+    S1 --> S2 --> S3 --> S4
 ```
 
----
-
-## 3. Dataset Strategy & Operational Roles
-
-| Dataset | Role | Priority | Annotation Format | Ground-Truth Splits on Disk | Operational Purpose |
-|---|---|---|---|---|---|
-| **VisDrone2019-DET** | Primary Development, Training, In-Domain Eval | **Mandatory** | HBB (`[bbox_left, bbox_top, width, height, score, category, trunc, occ]`) | `train` (6,471 imgs), `val` (548 imgs), `test-dev` (1,610 imgs) | Primary benchmark for architecture design, 4-stage curriculum (Epochs 1–150), loss sweeps, and 13-rung ablation ladder. Preserves ignore regions (`category == 0`). |
-| **UAVDT** | Cross-Domain Generalization | **Recommended** | HBB (`*_gt_whole.txt` + `*_gt_ignore.txt`) | 50 sequences: 30 `train`, 20 `test` via `M_attr` | Measures zero-shot out-of-domain transfer from VisDrone under differing camera angles and altitudes without fine-tuning. Evaluated over unified 3-class vehicle ontology (`car`, `truck`, `bus`). |
-| **DOTA-v1.5** | Aerial & Satellite Imagery | **Optional** | OBB ($x_1, y_1 \dots x_4, y_4$) converted to HBB envelope | `train` (469 imgs), `validation` (458 imgs), `test` (469 imgs) | Optional independent training and evaluation on overhead satellite imagery using documented OBB-to-HBB conversion. Local validation on `validation/images`. |
-| **SODA-A** | Small-Object Specialized Benchmark | **Optional** | COCO-style / SODA JSON | `train` (2,384 imgs), `test` (130 imgs); 2,513 in `Images.zip` | Optional independent diagnostic for extreme small objects ($< 15$ to $30$ px). Staged without blocking VisDrone development. |
-
-> [!NOTE]
-> **No Dataset Mixing in Training:** VisDrone2019-DET is the **sole** primary training dataset. UAVDT remains completely unseen during training and is strictly evaluated zero-shot to assess generalization. DOTA-v1.5 and SODA-A are isolated as independent experiment tracks.
+Optimisation:
+- AdamW with lr 1e-4 and weight decay 1e-4; cosine decay to 1e-6.
+- Batch 2 with gradient accumulation 2; mixed precision; gradient clipping at 10.
+- **Loss-spike guard:** skips a batch whose loss exceeds median + max(5 · 1.4826 · MAD, 2) over the last 200 batches, and skips an update whose gradient norm exceeds 5x its running median.
+- **Box variance:** $\beta$-NLL ($\beta=0.5$) with a soft floor at −6.
 
 ---
 
-## 4. Dataset Download Links & Folder Setup
+## 3. Datasets
 
-Place datasets in the `dataset/` root directory following this exact structure:
+| Dataset | Used for | Status in this repository |
+|---|---|---|
+| **UAVDT** | Training and test for the paper | Present in `dataset/UAVDT-Benchmark-M/` |
+| **VisDrone2019-DET** | Optional second pipeline (`src/data/visdrone.py`, `configs/experiments/visdrone_primary.yaml`) | Supported by the code but **not downloaded and not trained**; no paper result uses it |
 
+**UAVDT setup used in the paper:**
+- **Classes:** `car`, `truck`, `bus`.
+- **Splits:** the official split, 30 training sequences (24,143 frames) and 20 test sequences (16,592 frames).
+- **Training frames:** every 30th frame, 813 images.
+- **Test frames:** every 5th test frame starting at the 3rd (stride 5, offset 2), 3,318 images with 75,152 vehicles.
+- **Monitoring set** (validation during training and the stage guard): every 30th test frame, 559 images. 111 of them are also test frames.
+- **TTA selection frames:** 554 test frames, disjoint from the 3,318.
+
+Folder layout:
 ```
 dataset/
-├── VisDrone2019-DET/
-│   ├── VisDrone2019-DET-train/
-│   │   ├── images/
-│   │   └── annotations/
-│   ├── VisDrone2019-DET-val/
-│   │   ├── images/
-│   │   └── annotations/
-│   ├── VisDrone2019-DET-test-dev/
-│   │   ├── images/
-│   │   └── annotations/
-│   └── VisDrone2019-DET-test-challenge/
-│       └── images/
 ├── UAVDT-Benchmark-M/
-│   ├── M_attr/
-│   │   ├── train/
-│   │   └── test/
-│   ├── UAV-benchmark-M/
-│   └── UAV-benchmark-MOTD_v1.0/
-│       └── GT/
-├── DOTA-v1.5/
-│   ├── train/images/
-│   ├── validation/images/
-│   └── test/images/
-└── SODA-A/
-    ├── train/
-    ├── test/
-    └── Images.zip
+│   ├── M_attr/{train,test}/          # sequence split + weather / altitude tags
+│   ├── UAV-benchmark-M/              # frames
+│   └── UAV-benchmark-MOTD_v1.0/GT/   # *_gt_whole.txt, *_gt_ignore.txt
+└── VisDrone2019-DET/                 # optional, not present
+    └── VisDrone2019-DET-{train,val,test-dev}/{images,annotations}/
 ```
-
-### Official Download Portals:
-- **VisDrone2019-DET:** [http://aiskyeye.com/](http://aiskyeye.com/) or GitHub: [https://github.com/VisDrone/VisDrone-Dataset](https://github.com/VisDrone/VisDrone-Dataset)
-- **UAVDT Benchmark:** [https://sites.google.com/site/daviddo0323/](https://sites.google.com/site/daviddo0323/)
-- **DOTA-v1.5:** [https://captain-whu.github.io/DOTA/dataset.html](https://captain-whu.github.io/DOTA/dataset.html)
-- **SODA-A:** [https://shaosu.site/SODA/](https://shaosu.site/SODA/)
+Downloads:
+- UAVDT: https://sites.google.com/site/daviddo0323/
+- VisDrone: https://github.com/VisDrone/VisDrone-Dataset
 
 ---
 
-## 5. Environment Setup
+## 4. Environment Setup
 
-### Using `uv` (Recommended — 2-second setup):
 ```bash
-# Create virtual environment with Python 3.12
-uv venv .venv --python 3.12
-source .venv/bin/activate
-
-# Install dependencies
+# with uv
+uv venv .venv --python 3.12 && source .venv/bin/activate
 uv pip install -r requirements.txt
-```
 
-### Using standard `pip`:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
+# or with pip
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
+Requirements:
+- torch ≥ 2.2, torchvision ≥ 0.17, numpy, scipy, pyyaml, scikit-learn, tqdm, pillow, matplotlib, pytest.
+- Training used Apple MPS (`--device mps`). CUDA and CPU also work.
 
 ---
 
-## 6. Verification & Unit Testing
+## 5. Unit Tests
 
-Run the full automated verification test suite:
 ```bash
-pytest tests/
-```
-The test suite covers:
-1. `tests/test_dataset.py`: Coordinate scaling, aspect-ratio padding, flip augmentations, collate function, and DOTA OBB-to-HBB conversion.
-2. `tests/test_data_validation.py`: 10-point data audit, degenerate box filtering, and train/val split isolation.
-3. `tests/test_uncertainty.py`: Reproducible generator-aware inverted dropout and bounded uncertainty outputs ($U^a, U^e \in [0, 1]$).
-4. `tests/test_graph.py`: Candidate graph construction, spatial block partitioning, and Student-t weights.
-5. `tests/test_routing.py`: Non-zero Straight-Through surrogate gradient flow into router logits ($\frac{\partial L}{\partial s_{ij}} \neq 0$).
-6. `tests/test_message_passing.py`: Masked attention in 64-d space, benefit message gates, GRU update, and linear expansion to 256-d.
-7. `tests/test_fusion.py`: Channel-wise fusion gate bounds and feature recombination.
-8. `tests/test_consistency.py`: Object-centric prediction KL consistency with NaN-safe empty set autograd attachment.
-9. `tests/test_checkpoint.py`: Atomic persistence, PRNG restoration, momentum preservation, and checkpoint retention.
-10. `tests/test_end_to_end.py`: Multi-stage forward and backward propagation through all curriculum stages.
-
----
-
-## 7. Step-by-Step Execution Guide
-
-### Step 1: Run 10-Point Dataset Validation
-Audit dataset splits before training:
-```bash
-# Validate VisDrone validation set
-python scripts/validate_data.py --config configs/datasets/visdrone.yaml --split val --samples 548
-
-# Validate UAVDT test set
-python scripts/validate_data.py --config configs/datasets/uavdt.yaml --split test --samples 500
+pytest tests/          # 42 tests
 ```
 
-### Step 2: (Optional) Precompute Metadata Cache
-Pre-index VisDrone for faster epoch initialization:
-```bash
-python src/data/build_cache.py --root dataset/VisDrone2019-DET --out .cache
-```
-
-### Step 3: Train Primary UCR-MFG Model on VisDrone
-Execute the 4-stage 150-epoch progressive curriculum:
-```bash
-python scripts/train.py --config configs/experiments/visdrone_primary.yaml
-```
-- **Live Terminal Display:** Shows an animated progress bar, epoch count, batch progress, elapsed time, epoch ETA, loss breakdown, learning rate, and GPU/VRAM memory.
-- **Stage Progression:**
-  - **Stage 1 (Epochs 1–30):** Backbone, FPN, PreGraphUncertaintyHead, and DetectionHead ($L_{\text{det}} + \lambda_u L_u$).
-  - **Stage 2 (Epochs 31–60):** Enables GraphBuilder ($+ \lambda_g L_{\text{graph}}$).
-  - **Stage 3 (Epochs 61–90):** Enables UCRouter and BenefitAwareMPNN; the head sees $F + 0.1 H$ so routing receives a detection signal ($+ \lambda_{\text{inst}} L_{\text{inst}} + \lambda_{\text{benefit}} L_{\text{benefit}}$ every 2 steps).
-  - **Stage 4 (Epochs 91–150):** Enables the UncertaintyFusionGate ($+ \lambda_c L_{\text{consistency}}$) with cosine annealing to $10^{-6}$.
-- **Validation:** VisDrone val mAP every `val.interval` epochs; the best model is saved as `best.pth`.
-
-### Step 4: Resume Interrupted Training
-The checkpoint engine atomically writes `latest.pth` and `best.pth`. If a job is preempted or stopped with `Ctrl+C`:
-```bash
-# Resume from latest completed epoch
-python scripts/train.py --config configs/experiments/visdrone_primary.yaml --resume latest
-
-# Or resume from a custom checkpoint path
-python scripts/train.py --config configs/experiments/visdrone_primary.yaml --resume checkpoints/visdrone_primary/epoch_045.pth
-```
-Training continues from the exact epoch **and batch** that was saved; completed batches are skipped without being loaded.
-- **Ctrl+C / SIGTERM:** finishes the current optimizer step, saves `latest.pth` and `interrupted.pth`, and exits. Press Ctrl+C twice to quit immediately without saving.
-- **Periodic saves:** `latest.pth` is also written every `checkpoint.save_every_steps` batches (default 500; override with `--save-every N`, `0` disables), so a crash or power loss costs at most that many batches.
-- **Exact continuation:** the shuffle order depends only on (seed, epoch) and each sample's augmentation has its own seed, so the resumed batches are the ones the interrupted run would have seen. Optimizer momentum, learning rate, AMP scaler, curriculum stage, running epoch losses and RNG states are restored.
-- Resume with the same `--batch-size` and `--accumulate-grad-batches` as the saved run; a mismatch is rejected.
-
-### Step 5: Zero-Shot Cross-Domain Evaluation on UAVDT
-Evaluate the frozen VisDrone model on UAVDT test sequences without fine-tuning:
-```bash
-python scripts/eval.py \
-  --config configs/experiments/uavdt_zeroshot.yaml \
-  --weights checkpoints/visdrone_primary/best.pth \
-  --split test
-```
-Reports COCO-style mAP@[.5:.95], AP50, AP75, APs/APm/APl, D-ECE and the AUROC of $U^a$, $U^e$, box std and $1 -$ score for separating false from true detections, over the mapped 3-class vehicle ontology (`car`, `truck`, `bus`). The model and curriculum stage are rebuilt from the checkpoint.
-
-### Step 6: In-Domain Test-Dev Evaluation
-Run the final one-time blind evaluation on VisDrone `test-dev`:
-```bash
-python scripts/eval.py \
-  --config configs/experiments/visdrone_primary.yaml \
-  --weights checkpoints/visdrone_primary/best.pth \
-  --split test_dev
-```
-
-### Step 7: Ablations and Router Diagnostic
-Ablation switches live in `configs/model/default.yaml`:
-
-| Switch | Ablation |
+| File | Checks |
 |---|---|
-| `router.enabled: false` | Dense MFG graph, every candidate edge passes messages |
-| `router.use_uncertainty: false` | Router without $U^a$/$U^e$ (scores and budgets) |
-| `mpnn.benefit_gate: false` | Message passing without the benefit gate |
-| `fusion.mode: fixed` / `add` | Fixed 0.5 fusion / plain addition instead of the C4 gate |
-
-```bash
-python scripts/oracle_router_pilot.py --weights checkpoints/visdrone_primary/best.pth --samples 50
-```
-Compares router precision/recall against a ground-truth same-object oracle per edge type.
-
-### Step 8: Paper Experiments, Tables and Figures
-Every number in the paper tables comes from a measured result file. Missing results are shown as `—`, evaluations on image subsets are excluded, and external baselines appear only with a cited source.
-
-```bash
-# 1. Training configs for the full model, two in-house baselines and nine ablations (3 seeds; "short" = 50 epochs)
-python scripts/make_experiment_configs.py --seeds 42 43 44 --schedule full
-python scripts/train.py --config configs/paper/paper_ucr_mfg_full_s42.yaml        # repeat for each config
-
-# 2. All evaluations for one trained model: val, test-dev, UAVDT zero-shot, 6 corruptions x 3 severities
-python scripts/run_paper_eval.py --weights checkpoints/paper/paper_ucr_mfg_full_s42/best.pth
-python scripts/eval.py --weights <best.pth> --split test_dev --mc-passes 1     # optional: T sensitivity (also 2, 5)
-
-# 3. Cost, qualitative figures, then every table, figure and a status checklist
-python scripts/benchmark.py --weights checkpoints/paper/*/best.pth
-python scripts/visualize.py --weights checkpoints/paper/paper_ucr_mfg_full_s42/best.pth --num 6
-python scripts/make_paper_artifacts.py            # -> paper/tables/*.md|.tex, paper/figures/*.pdf|.png, paper/STATUS.md
-```
-
-| Output | Content |
-|---|---|
-| `main_visdrone` | test-dev comparison: external baselines (`results/external_baselines.yaml`), detector-only, MFG-style, UCR-MFG |
-| `ablations` | nine ablations on val with Δ mAP and paired bootstrap p-values (Holm–Bonferroni) |
-| `uavdt_zero_shot` | zero-shot transfer overall and per weather (daylight / night / fog) and altitude |
-| `occlusion` | AP50 and recall per VisDrone occlusion level |
-| `robustness` | mAP under blur, motion blur, noise, fog, low light and low contrast |
-| `uncertainty` | D-ECE, error-detection AUROC, AURC, OOD AUROC of $U^e$ (VisDrone vs UAVDT) |
-| `efficiency`, `mc_passes` | parameters, GFLOPs, latency, routed edges; effect of the number of MC passes |
-| figures | reliability, risk–coverage, uncertainty vs occlusion, domain shift, robustness, training curves, qualitative |
-
-`paper/STATUS.md` lists what is still missing: untrained or incomplete runs, single-seed rows, missing evaluations, frame-strided UAVDT, uncommitted code and unsourced baselines.
+| `test_dataset.py` | resize + pad, box and mask scaling, flip augmentation, collate |
+| `test_data_validation.py` | train/test split isolation, degenerate-box detection |
+| `test_uncertainty.py` | reproducible dropout, $U_a$/$U_e$ maps in [0, 1], $U_e = 0$ when epistemic is off |
+| `test_graph.py` | candidate edges and Student-t weights, every fine node has a parent, pyramid round trip |
+| `test_routing.py` | vectorised top-K = brute force, budgets and straight-through gradient, larger budgets for uncertain receivers, disabled router keeps all edges |
+| `test_message_passing.py` | MPNN shapes and gradient, benefit gradient on unselected edges with no forward effect, fusion modes, gate initialisation |
+| `test_consistency.py` | cross-scale KL consistency, empty and valid cases |
+| `test_metrics.py` | mAP, ignore regions, uncertainty AUROC, benefit targets |
+| `test_analysis.py` | AUROC, risk-coverage, reliability, uncertainty by occlusion, domain shift |
+| `test_checkpoint.py` | atomic checkpointing and resumption, old-checkpoint purge |
+| `test_resumable.py` | exact mid-epoch resume, per-epoch shuffling |
+| `test_end_to_end.py` | a training step in every curriculum stage, inference with uncertainty |
 
 ---
 
-## 8. UAVDT Paper Experiment (Trained Model and Results)
+## 6. Trained Models and Results
 
-The IEEE paper (`paper/paper.tex`, 6-page version `paper/paper_6page.tex`) reports a model trained **on UAVDT** (813 training frames, 544x1024, batch size 2) on an Apple M5 laptop (MPS). Curriculum: stage 1 = epochs 1-20, stage 2 = 21-40, stage 3 = 41-60, stage 4 = 61-100.
+### Weights (`models/`)
 
-### Trained weights (`models/`)
-
-| File | Stage | Epoch | Test mAP | Test D-ECE |
+| File | Model | Epoch | Test mAP | Test D-ECE |
 |---|---|---|---|---|
-| `models/stage1_ep020.pth` | 1: FCOS + C1 (re-run with final recipe) | 20 | 18.4 | 0.088 |
-| `models/stage2_ep035.pth` | 2: + fuzzy graph | 35 | 18.8 | 0.094 |
-| `models/stage3_ep060.pth` | 3: + C2 router, C3 message passing | 60 | 18.0 | 0.065 |
-| `models/stage4_ep100_final.pth` | 4: + C4 residual fusion, **final model** | 100 | 17.5 (18.9 with TTA) | 0.066 |
+| `models/stage1_ep020.pth` | FCOS + C1, no graph (**baseline** in paper Table IV) | 20 | 18.4 | 0.088 |
+| `models/stage2_ep035.pth` | + fuzzy graph | 35 | 18.8 | 0.094 |
+| `models/stage3_ep060.pth` | + C2 router, C3 message passing | 60 | 18.0 | 0.065 |
+| `models/stage4_ep100_final.pth` | + C4 residual fusion, **final model** (used for all paper results) | 100 | 17.5 (18.9 with TTA) | 0.066 |
 
-Test set: 3,318 frames (every 5th UAVDT test frame from offset 2), single view unless noted. Final-model AUROC for separating false from true detections: Ua 0.960, Ue 0.931, box std 0.975, 1-score 0.970. See `models/README.md` for where each file came from.
+Every model is evaluated on the same 3,318 test frames with a single view unless noted. `models/README.md` says where each file came from. `saved_models/uavdt_ep54_before_collapse.pth` is the resume point for the final stage-4 run.
+
+### Final model on the 3,318 test frames
+
+| | mAP | AP50 | AP75 | APs | APm | APl | D-ECE |
+|---|---|---|---|---|---|---|---|
+| Without TTA | 17.5 | 32.4 | 17.4 | 11.0 | 29.1 | 30.1 | **0.066** |
+| With TTA | **18.9** | **35.0** | **18.5** | **11.9** | **30.0** | **32.1** | 0.106 |
+
+- **Per class AP (without / with TTA):** car 32.1 / 34.2, truck 5.6 / 6.0, bus 14.9 / 16.6.
+- **AUROC for separating false from true detections (without TTA):** $U_a$ 0.960, $U_e$ 0.931, box std 0.975, 1 − score 0.970.
+- **Speed:** 0.25 s per image on the M5 (MPS), including the 10 dropout passes.
 
 ### Where things are
 
 | Folder | Content |
 |---|---|
-| `models/` | One weights file per curriculum stage (used in the paper) |
-| `results/final_model/` | Final model: TTA search (`stage4_end_tune*`), chosen setting (`stage4_end_choice.json`), test results single view (`test_single_view.*`) and with TTA (`test_tta.*`) |
-| `results/stages/stage1..3/` | `test.json` + `test.log` for the earlier stages |
+| `results/final_model/` | `test_single_view.json/.log` (without TTA), `test_tta.json/.log` (with TTA), TTA search (`stage4_end_tune*.json/.log`, 64 settings), chosen settings (`stage4_end_choice.json`, `single_view_choice.json`) |
+| `results/stages/stage1..3/` | `test.json` + `test.log` for the stage 1-3 models |
 | `results/demo/` | Single-image demo pictures |
-| `checkpoints/<run>/` | Each training run with its logs: `train_log.jsonl` (per-epoch losses, monitoring mAP/D-ECE), `stdout.log`, `spikes.jsonl`, `epoch_*.pth`, `latest.pth` |
-| `paper/` | LaTeX sources and `figures/qualitative.png` |
+| `checkpoints/<run>/` | Logs of each training run: `train_log.jsonl` (per-epoch losses, monitoring mAP/D-ECE), `stdout.log`, `spikes.jsonl`. Weights of finished runs were removed; the paper models are in `models/`. |
+| `notebooks/` | `01_UCR_MFG_implementation.ipynb` (config, model and loss source, live forward pass, uncertainty maps) and `02_UCR_MFG_experiments_results.ipynb` (dataset, training curves, all result tables, AUROC, TTA, sample detections, speed), saved with outputs |
+| `paper/` | `paper_6page.tex` and `figures/` (`architecture.png` = Fig. 1, `qualitative.png` = Fig. 2) |
 
 Training runs in `checkpoints/`:
-- `uavdt_primary/` - epochs 1-75 (stages 1-3; the stage-4 attempt with the convex gate is in its log)
-- `uavdt_stage4_frozen/` - stage 4 with convex gate and frozen detector (failed design, reported in Table V)
-- `uavdt_stage4_residual/` - final stage 4 (epochs 61-100) with residual fusion, resumed from `saved_models/uavdt_ep54_before_collapse.pth`
-- `uavdt_stage1_rerun/` - stage 1 re-trained (epochs 1-20) to obtain the stage-1 test row
+- `uavdt_primary/`: epochs 1-75. This covers stages 1-3; it also holds the failed stage-4 attempt with the convex gate and the loss collapse at epoch 55.
+- `uavdt_stage4_frozen/`: stage 4 with the convex gate and a frozen detector. This design failed; the paper discusses it in Section IV-C.
+- `uavdt_stage4_residual/`: the final stage 4 (epochs 61-100) with residual fusion, resumed from `saved_models/uavdt_ep54_before_collapse.pth`. `stage4_guard.json` records the rollback at epoch 65.
+- `uavdt_stage1_rerun/`: stage 1 re-trained (epochs 1-20) with the final recipe. This is the baseline.
 
-### Commands
+---
 
+## 7. Reproducing the Paper (UAVDT)
+
+### Step 1: Check the dataset
 ```bash
-# Train (UAVDT curriculum); resume after Ctrl+C with --resume latest
-python scripts/train.py --config configs/experiments/uavdt_primary.yaml
-python scripts/train.py --config configs/experiments/uavdt_stage4_residual.yaml \
-  --resume saved_models/uavdt_ep54_before_collapse.pth
-python scripts/check_plateau.py --log checkpoints/uavdt_stage4_residual/train_log.jsonl
+python scripts/validate_data.py --config configs/datasets/uavdt.yaml --split test --samples 500
+```
 
-# Evaluate on the 3,318 test frames (single view / with the tuned TTA setting)
+### Step 2: Train
+```bash
+# Stages 1-3 (and the original stage 4); resume after Ctrl+C with --resume latest
+python scripts/train.py --config configs/experiments/uavdt_primary.yaml --device mps
+
+# Final stage 4 (residual fusion), from the epoch-54 checkpoint
+python scripts/train.py --config configs/experiments/uavdt_stage4_residual.yaml \
+  --resume saved_models/uavdt_ep54_before_collapse.pth --device mps
+
+# Summarise a training log, flag plateaus
+python scripts/check_plateau.py --log checkpoints/uavdt_stage4_residual/train_log.jsonl
+```
+All 100 epochs took 13.8 h on an Apple M5 (16 GB).
+
+Resuming:
+- `train.py` writes `latest.pth` every 500 batches (`--save-every N`; 0 disables) and on Ctrl+C. It also writes `interrupted.pth` on Ctrl+C. Press Ctrl+C twice to quit without saving.
+- `--resume latest | best | <path>` continues from the exact epoch and batch. The optimiser, learning rate, AMP scaler, stage, RNG states and shuffle order are all restored.
+- Use the same `--batch-size` and `--accumulate-grad-batches` as the saved run.
+
+### Step 3: Evaluate on the 3,318 test frames
+```bash
+# WITHOUT TTA (single view)  -> 17.5 mAP, D-ECE 0.066
 python scripts/tune_inference.py test --weights models/stage4_ep100_final.pth \
   --choice results/final_model/single_view_choice.json --stride 5 --offset 2
+
+# WITH TTA (scales 1 + 1.25, flip, NMS 0.6, threshold 0.02)  -> 18.9 mAP, D-ECE 0.106
 python scripts/tune_inference.py test --weights models/stage4_ep100_final.pth \
   --choice results/final_model/stage4_end_choice.json --stride 5 --offset 2
 
-# Re-tune TTA on the 554 tuning frames (disjoint from the test frames)
-python scripts/tune_inference.py tune --weights models/stage4_ep100_final.pth --out-dir results/final_model
-
-# Single image: a test frame by index, or any picture -> results/demo/
-python scripts/demo_image.py --index 2
-python scripts/demo_image.py --image path/to/photo.jpg
-
-# Paper Fig. 3 (single view vs TTA; daylight / night / fog / high altitude)
-python scripts/make_qualitative.py --frames M0403_img000169 M1001_img000202 M1009_img000295 auto \
-  --both --candidates 20 --sequences M0701
+# Baseline / earlier stages (same protocol), e.g. the plain-detector baseline -> 18.4 mAP
+python scripts/tune_inference.py test --weights models/stage1_ep020.pth \
+  --choice results/final_model/single_view_choice.json --stride 5 --offset 2
 ```
+
+### Step 4 (optional): Re-select the TTA setting
+```bash
+# 64 settings on the 554 selection frames (disjoint from the test frames), "robust" rule
+python scripts/tune_inference.py tune --weights models/stage4_ep100_final.pth --out-dir results/final_model
+```
+
+### Step 5: Test on a single image
+
+`scripts/demo_image.py` runs the final model on one image and saves a picture of its detections with their uncertainties.
+
+```bash
+# A UAVDT test frame, chosen by its index in the test split
+python scripts/demo_image.py --index 2               # without TTA (single view)
+python scripts/demo_image.py --index 2 --tta         # with TTA (setting used in the paper)
+python scripts/demo_image.py --index 2 --compare     # both in one picture: single view (top), TTA (bottom)
+
+# Any image of your own (JPG / PNG)
+python scripts/demo_image.py --image path/to/photo.jpg
+python scripts/demo_image.py --image path/to/photo.jpg --compare
+```
+
+| Mode | Command flag | What it does | Speed (CPU) |
+|---|---|---|---|
+| Without TTA | *(none)* | one forward pass on the image | ~0.8 s |
+| With TTA | `--tta` | 4 views (original, flipped, 1.25x, 1.25x flipped), merged by NMS 0.6 | ~3.7 s |
+| Compare | `--compare` | runs both and stacks them: without TTA (top), with TTA (bottom) | ~4.5 s |
+
+TTA finds more vehicles, but its confidence scores are less well calibrated (D-ECE 0.106 vs 0.066). Use the model without TTA when the scores or uncertainties are passed on to a planner or operator.
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--score-thresh 0.3` | lower the confidence cutoff to draw more boxes | `0.5` |
+| `--device mps` | run on the Mac GPU (faster) | `cpu` |
+| `--weights <file>` | which trained model to use | `models/stage4_ep100_final.pth` |
+| `--choice <file>` | TTA setting | `results/final_model/stage4_end_choice.json` |
+| `--out <dir>` | output folder | `results/demo` |
+
+Output:
+- The terminal prints the number of detections per class and the run time. For example, `--index 2 --compare` gives 8 detections in 0.8 s without TTA and 14 in 3.7 s with TTA, on CPU.
+- The picture is saved as `results/demo/<name>.png`, `<name>_tta.png` or `<name>_compare.png`.
+
+Reading the picture:
+- Box colours: green = car, orange = truck, blue = bus.
+- Each label shows the score, $U_a$ and $U_e$.
+- On test frames, ground-truth boxes are dashed white and ignore regions are shaded grey.
+
+### Step 6: Paper figures and notebooks
+```bash
+python scripts/make_architecture_figure.py        # -> paper/figures/architecture.png (Fig. 1)
+python scripts/make_qualitative.py --frames M0403_img000169 M1001_img000202 M1009_img000295 M0701_img000204
+                                                  # -> paper/figures/qualitative.png (Fig. 2)
+python scripts/make_notebooks.py                  # -> notebooks/*.ipynb, executed, with outputs
+```
+To open the notebooks: `pip install jupyter && jupyter notebook notebooks/`. They also render directly in VS Code and on GitHub.
+
+### Step 7: Compile the paper
+Upload `paper/paper_6page.tex` and the `paper/figures/` folder to Overleaf, or run `pdflatex paper_6page.tex` twice inside `paper/`.
+
+---
+
+## 8. Further Tools (not used for the paper results)
+
+The code also contains a VisDrone pipeline and a larger experiment suite. These were **not run**, so no result in the paper or in `results/` comes from them.
+
+| Tool | Command |
+|---|---|
+| VisDrone training (150 epochs: stages 1-30 / 31-60 / 61-90 / 91-150) | `python scripts/train.py --config configs/experiments/visdrone_primary.yaml` |
+| General evaluation (VisDrone splits, UAVDT zero-shot, corruptions, MC-pass count) | `python scripts/eval.py --weights <ckpt> --config <exp.yaml> --split test [--corruption fog --severity 3] [--mc-passes 5]` |
+| UAVDT zero-shot from a VisDrone model | `python scripts/eval.py --config configs/experiments/uavdt_zeroshot.yaml --weights checkpoints/visdrone_primary/best.pth --split test` |
+| VisDrone index cache | `python -m src.data.build_cache --root dataset/VisDrone2019-DET --out .cache` |
+| Router vs ground-truth oracle | `python scripts/oracle_router_pilot.py --weights <ckpt> --samples 50` |
+| Ablation / baseline configs (11 variants, several seeds) | `python scripts/make_experiment_configs.py --seeds 42 43 44 --schedule full` |
+| Evaluation suite for one model | `python scripts/run_paper_eval.py --weights <ckpt>` |
+| Parameters, GFLOPs, latency | `python scripts/benchmark.py --weights <ckpt>` |
+| Routed-edge visualisation | `python scripts/visualize.py --weights <ckpt> --num 6` |
+| Tables and figures from that suite | `python scripts/make_paper_artifacts.py` |
+
+The ablation switches are in `configs/model/*.yaml`:
+
+| Switch | Ablation |
+|---|---|
+| `router.enabled: false` | dense graph: every candidate edge passes messages |
+| `router.use_uncertainty: false` | router without $U_a$/$U_e$ in scores and budgets |
+| `mpnn.benefit_gate: false` | message passing without the benefit gate |
+| `fusion.mode: gate / fixed / add / residual` | convex gate / fixed 0.5 / plain addition / residual gate (the final model uses `residual`) |
 
 ---
 
 ## 9. Directory Structure
 
-
 ```
 ucr_mfg/
 ├── configs/
 │   ├── datasets/
-│   │   ├── visdrone.yaml
-│   │   ├── uavdt.yaml
-│   │   ├── dota_v1_5.yaml
-│   │   └── soda_a.yaml
+│   │   ├── uavdt.yaml                  # UAVDT: 3 classes, 544x1024 canvas
+│   │   └── visdrone.yaml               # optional VisDrone pipeline
 │   ├── experiments/
-│   │   ├── visdrone_primary.yaml
-│   │   ├── uavdt_primary.yaml          # UAVDT curriculum (paper)
-│   │   ├── uavdt_stage4_residual.yaml  # final stage 4, residual fusion
+│   │   ├── uavdt_primary.yaml          # UAVDT curriculum, stages 1-4 (paper)
+│   │   ├── uavdt_stage4_residual.yaml  # final stage 4, residual fusion + stage guard
 │   │   ├── uavdt_stage4_frozen.yaml    # stage 4, convex gate (failed design)
-│   │   ├── uavdt_stage1_rerun.yaml     # stage-1 re-run for the test row
-│   │   ├── uavdt_zeroshot.yaml
-│   │   ├── dota_independent.yaml
-│   │   └── soda_independent.yaml
+│   │   ├── uavdt_stage1_rerun.yaml     # stage-1 re-run = baseline
+│   │   ├── uavdt_zeroshot.yaml         # VisDrone -> UAVDT zero-shot (not run)
+│   │   └── visdrone_primary.yaml       # VisDrone curriculum (not run)
 │   └── model/
-│       ├── default.yaml
-│       └── residual.yaml       # residual fusion Z = F + (1-lambda)H
-├── dataset/                    # Local dataset folder (symlinked or downloaded)
+│       ├── default.yaml                # convex gate, lambda_c = 0.1
+│       └── residual.yaml               # final model: residual fusion, lambda_c = 0
+├── dataset/                            # UAVDT-Benchmark-M (not in git)
 ├── src/
 │   ├── data/
-│   │   ├── dataset.py          # Common BaseDataset interface
-│   │   ├── visdrone.py         # VisDrone parser & ignore masks
-│   │   ├── uavdt.py            # UAVDT sequence parser & vehicle ontology
-│   │   ├── dota.py             # DOTA parser & OBB-to-HBB conversion
-│   │   ├── soda_a.py           # SODA-A parser & validator
-│   │   ├── transforms.py       # Aspect-ratio padding & coordinate scaling
-│   │   ├── augmentations.py    # Training augmentations (disjoint from eval)
-│   │   ├── validation.py       # 10-point data validation engine
-│   │   ├── build_cache.py      # Precomputed metadata cache
-│   │   └── collate.py          # Batch collation
+│   │   ├── dataset.py                  # common base dataset
+│   │   ├── uavdt.py                    # UAVDT sequences, ignore regions, weather/altitude tags
+│   │   ├── visdrone.py                 # VisDrone parser
+│   │   ├── transforms.py               # aspect-ratio resize + pad (114)
+│   │   ├── augmentations.py            # flip, brightness/contrast jitter
+│   │   ├── corruptions.py              # blur, noise, fog, low light, contrast
+│   │   ├── resumable.py                # seeded sampler for exact mid-epoch resume
+│   │   ├── validation.py               # dataset audit
+│   │   ├── build_cache.py              # VisDrone index cache
+│   │   └── collate.py                  # batch collation
 │   ├── models/
-│   │   ├── backbone.py         # ResNet-50 + FPN (C=256, strides 8, 16, 32)
-│   │   ├── uncertainty_head.py # C1: Decoupled PreGraphUncertaintyHead (Ua, Ue)
-│   │   ├── graph_builder.py    # Spatial block partitioning & Student-t kernel
-│   │   ├── router.py           # C2: 140-d UCRouter with Straight-Through Top-K
-│   │   ├── message_passing.py  # C3: BenefitAwareMPNN (64-d attention -> 256-d expansion)
-│   │   ├── fusion.py           # C4: UncertaintyFusionGate (channel-wise lambda_i)
-│   │   ├── detection_head.py   # Probabilistic FCOS head (cls, ltrb, centerness, box log-variance)
-│   │   ├── graph_ops.py        # Graph/Routing containers, segment softmax, pyramid reshaping
-│   │   ├── postprocess.py      # Decoding + NMS with per-detection uncertainty
-│   │   └── ucr_mfg.py          # End-to-end staged UCR-MFG detector
+│   │   ├── backbone.py                 # ResNet-50 + FPN (P3-P5, 256 ch)
+│   │   ├── uncertainty_head.py         # C1: Ua, Ue (MC dropout)
+│   │   ├── graph_builder.py            # multi-scale fuzzy candidate graph, Student-t kernel
+│   │   ├── router.py                   # C2: 140-d router, typed top-K, straight-through mask
+│   │   ├── message_passing.py          # C3: benefit-aware MPNN (64-d -> 256-d)
+│   │   ├── fusion.py                   # C4: residual / convex / fixed / add fusion
+│   │   ├── detection_head.py           # FCOS head with box log-variance
+│   │   ├── graph_ops.py                # graph containers, segment softmax, pyramid reshaping
+│   │   ├── postprocess.py              # decoding + NMS, per-detection Ua, Ue, box std
+│   │   └── ucr_mfg.py                  # full staged detector
 │   ├── losses/
-│   │   ├── detection_loss.py   # Focal + CIoU + Centerness
-│   │   ├── uncertainty_loss.py # Log-space box NLL + Cls NLL
-│   │   ├── graph_loss.py       # Dirichlet Laplacian Energy
-│   │   ├── router_loss.py      # Weak instance BCE + Benefit distillation
-│   │   ├── consistency_loss.py # Object-centric prediction KL consistency
-│   │   └── total_loss.py       # Multi-task objective for all 4 curriculum stages
-│   ├── engine.py               # Target assignment, benefit measurement, evaluation loop
+│   │   ├── detection_loss.py           # focal + CIoU + centerness
+│   │   ├── uncertainty_loss.py         # beta-NLL box variance (soft floor) + class NLL
+│   │   ├── graph_loss.py               # Dirichlet energy
+│   │   ├── router_loss.py              # instance prior + benefit distillation
+│   │   ├── consistency_loss.py         # cross-scale KL (implemented, off in final model)
+│   │   └── total_loss.py               # stage-aware total loss
+│   ├── analysis/uncertainty.py         # AUROC, risk-coverage, reliability, domain shift
+│   ├── engine.py                       # target assignment, benefit measurement, eval loop
+│   ├── evaluation.py                   # checkpoint loading, dataset/eval helpers
 │   └── utils/
-│       ├── checkpoint.py       # Atomic saving, full state, graceful interrupt
-│       ├── progress.py         # Live terminal animated progress display
-│       ├── metrics.py          # COCO-style mAP, D-ECE, uncertainty AUROC
-│       └── bootstrap.py        # Paired bootstrap test & Holm-Bonferroni correction
+│       ├── checkpoint.py               # atomic saves, full training state
+│       ├── progress.py                 # live terminal progress
+│       ├── metrics.py                  # COCO mAP, D-ECE, AUROC
+│       └── bootstrap.py                # paired bootstrap, Holm-Bonferroni
 ├── scripts/
-│   ├── train.py                # 4-stage training script with resume support
-│   ├── eval.py                 # Evaluation script for VisDrone, UAVDT, DOTA
-│   ├── validate_data.py        # CLI dataset integrity audit tool
-│   ├── oracle_router_pilot.py  # Diagnostic GT-instance upper bound
-│   ├── tune_inference.py       # UAVDT test evaluation + TTA tuning
-│   ├── demo_image.py           # Detections + uncertainty on one image
-│   ├── make_qualitative.py     # Paper Fig. 3
-│   └── check_plateau.py        # Summarise train_log.jsonl, flag plateaus
-├── models/                     # Final weights, one per curriculum stage (git-ignored .pth)
-├── checkpoints/                # Training runs with their logs (git-ignored)
-├── saved_models/               # Resume point uavdt_ep54_before_collapse.pth
+│   ├── train.py                        # curriculum training, spike guard, stage guard, resume
+│   ├── tune_inference.py               # UAVDT test evaluation + TTA selection (paper numbers)
+│   ├── demo_image.py                   # single image, with / without TTA
+│   ├── check_plateau.py                # summarise train_log.jsonl
+│   ├── validate_data.py                # dataset audit CLI
+│   ├── make_architecture_figure.py     # paper Fig. 1
+│   ├── make_qualitative.py             # paper Fig. 2
+│   ├── make_notebooks.py               # builds notebooks/*.ipynb with outputs
+│   ├── eval.py                         # general evaluation (Section 8)
+│   ├── run_paper_eval.py               # evaluation suite (Section 8)
+│   ├── make_experiment_configs.py      # ablation configs (Section 8)
+│   ├── make_paper_artifacts.py         # suite tables/figures (Section 8)
+│   ├── benchmark.py                    # params, GFLOPs, latency
+│   ├── visualize.py                    # routed-edge visualisation
+│   └── oracle_router_pilot.py          # router vs ground-truth oracle
+├── tests/                              # 12 files, 42 tests
+├── models/                             # paper weights, one per stage (+ README.md)
+├── saved_models/                       # uavdt_ep54_before_collapse.pth (resume point)
+├── checkpoints/                        # training logs per run
 ├── results/
-│   ├── final_model/            # TTA tuning + test results of the final model
-│   ├── stages/                 # Test results of stages 1-3
-│   └── demo/                   # Demo pictures
-├── paper/                      # LaTeX sources (paper.tex, paper_6page.tex) and figures
-├── tests/                      # Automated test suite
-├── pyproject.toml              # Project metadata & pytest configuration
-├── requirements.txt            # Python dependencies
-└── README.md                   # Complete reproduction & execution guide
+│   ├── final_model/                    # test results with / without TTA, TTA search
+│   ├── stages/                         # stage 1-3 test results
+│   └── demo/                           # demo pictures
+├── notebooks/                          # implementation + results notebooks (with outputs)
+├── paper/
+│   ├── paper_6page.tex                 # IEEE 6-page paper
+│   └── figures/                        # architecture.png, qualitative.png
+├── pyproject.toml
+├── requirements.txt
+└── README.md
 ```
-

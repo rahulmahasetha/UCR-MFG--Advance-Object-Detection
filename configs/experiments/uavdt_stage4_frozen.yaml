@@ -14,7 +14,7 @@ train:
   scheduler: "CosineAnnealingLR"
   img_size: [544, 1024]  # (H, W): native 1024x540 frames, no downscaling / no wasted padding
   init_weights: "coco_fcos"  # start from COCO-trained FCOS-R50-FPN (backbone, FPN, head towers, car/truck/bus)
-  frame_stride: 30     # every 30th frame (~1/s of video) -> 813 train images; ~8.5-10 h for 100 epochs on M5 Air
+  frame_stride: 30     # every 30th frame (~1/s of video) -> 813 train images; ~13.8 h for 100 epochs on M5 (MPS)
   stages:
     stage_1:
       epochs: [1, 20]
@@ -26,17 +26,17 @@ train:
       losses: ["det", "unc", "graph"]
     stage_3:
       epochs: [41, 60]
-      active_modules: ["router"]
+      active_modules: ["router", "mpnn"]   # C2 + C3, fixed residual Z = F + 0.1 H
       losses: ["det", "unc", "graph", "inst", "benefit"]
     stage_4:
       epochs: [61, 100]
-      active_modules: ["mpnn", "fusion"]
+      active_modules: ["fusion"]          # C4 gate replaces the fixed 0.1
       losses: ["all"]
       freeze: ["backbone", "det_head"]   # keep the stage-3 detector fixed; only graph modules + fusion learn
       fusion_gate_bias: 4.0              # lambda ~ 0.98 at stage start (default 2.0 -> 0.88 shrank features 12%)
 val:
   interval: 5        # 20 validations over 100 epochs -> best.pth + val metrics in train_log.jsonl
-  frame_stride: 30   # ~530 of 15,284 test frames; run full test (stride 1) for final numbers
+  frame_stride: 30   # monitoring set: 559 of 16,592 test frames; final numbers: tune_inference.py test --stride 5 --offset 2 (3,318 frames)
   batch_size: 2
   max_batches: null
 checkpoint:
