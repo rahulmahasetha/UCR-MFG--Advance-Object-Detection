@@ -118,19 +118,28 @@ Optimisation:
 - **Monitoring set** (validation during training and the stage guard): every 30th test frame, 559 images. 111 of them are also test frames.
 - **TTA selection frames:** 554 test frames, disjoint from the 3,318.
 
+> **The dataset is not included in this repository or its zip file.** Download UAVDT and place it in `dataset/` as shown below.
+
+**Download links:**
+
+| Dataset | Link | What to download |
+|---|---|---|
+| UAVDT (required) | [https://sites.google.com/view/grli-uavdt](https://sites.google.com/view/grli-uavdt) (mirror: [https://sites.google.com/site/daviddo0323/](https://sites.google.com/site/daviddo0323/)) | `UAV-benchmark-M` (frames), `UAV-benchmark-MOTD_v1.0` (ground truth `GT/`), `M_attr` (sequence split and attributes) |
+
 Folder layout:
 ```
 dataset/
-├── UAVDT-Benchmark-M/
-│   ├── M_attr/{train,test}/          # sequence split + weather / altitude tags
-│   ├── UAV-benchmark-M/              # frames
-│   └── UAV-benchmark-MOTD_v1.0/GT/   # *_gt_whole.txt, *_gt_ignore.txt
-└── VisDrone2019-DET/                 # optional, not present
-    └── VisDrone2019-DET-{train,val,test-dev}/{images,annotations}/
+└── UAVDT-Benchmark-M/
+    ├── M_attr/{train,test}/          # sequence split + weather / altitude tags
+    ├── UAV-benchmark-M/              # frames
+    └── UAV-benchmark-MOTD_v1.0/GT/   # *_gt_whole.txt, *_gt_ignore.txt
 ```
-Downloads:
-- UAVDT: https://sites.google.com/site/daviddo0323/
-- VisDrone: https://github.com/VisDrone/VisDrone-Dataset
+Check the layout after downloading:
+```bash
+python scripts/validate_data.py --config configs/datasets/uavdt.yaml --split test --samples 500
+```
+
+> The trained weights in `models/` are enough to run `scripts/demo_image.py --image <your photo>` without the dataset. Training, test evaluation and `--index` need UAVDT.
 
 ---
 
